@@ -54,7 +54,20 @@ def main():
     ap.add_argument("--fps", type=int, default=24)
     ap.add_argument("--duree-s", type=int, default=45, help="durée cible du clip en secondes")
     ap.add_argument("--out", default=os.path.join(ROOT, "clip_stibmap_p0.mp4"))
+    ap.add_argument("--html", default=None,
+                    help="page à filmer (défaut : le STIBMAP*_local.html le plus récent)")
     args = ap.parse_args()
+
+    html = args.html
+    if not html:
+        candidats = [f for f in os.listdir(ROOT)
+                     if f.startswith("STIBMAP") and f.endswith("_local.html")]
+        if not candidats:
+            sys.exit("aucun STIBMAP*_local.html trouvé — lancer build_standalone(_p1).py")
+        html = os.path.join(ROOT, max(candidats, key=lambda f: os.path.getmtime(os.path.join(ROOT, f))))
+    if not html.startswith("http") and not os.path.isfile(html):
+        sys.exit(f"introuvable : {html}")
+    print(f"source filmée : {html}")
 
     # la journée simulée va de 04:00 à 25:30 (77 100 s) -> compression temporelle
     T_START, T_END = 4 * 3600, 25 * 3600 + 1800
@@ -68,16 +81,28 @@ def main():
     t0 = time.time()
     print(f"Rendu {n_frames} frames ({args.duree_s}s à {args.fps} fps), "
           f"Δt sim = {dt_clip}s/frame — cible {args.out}")
-    for i in range(n_frames):
+    echecs = []
+    i = 0
+    base_url = html if html.startswith("http") else "file:///" + html.replace("\\", "/")
+    while i < n_frames:
         t = T_START + i * dt_clip
         png = os.path.join(SCRATCH, f"f{i:04d}.png")
-        url = f"file:///{HTML}?t={t}&pause=1".replace("\\", "/")
-        r = subprocess.run(
-            [EDGE, "--headless", "--disable-gpu", "--window-size=1920,1080",
-             "--virtual-time-budget=4000", f"--screenshot={png}", url],
-            capture_output=True, timeout=60)
-        if not os.path.isfile(png):
-            sys.exit(f"frame {i} manquante — arrêt")
+        url = f"{base_url}?t={t}&pause=1"
+        try:
+            subprocess.run(
+                [EDGE, "--headless", "--disable-gpu", "--window-size=1920,1080",
+                 "--virtual-time-budget=4000", f"--screenshot={png}", url],
+                capture_output=True, timeout=45)
+        except subprocess.TimeoutExpired:
+            pass  # Edge hangé : retry ci-dessous
+        if not os.path.isfile(png) or os.path.getsize(png) == 0:
+            echecs.append(i)
+            if echecs.count(i) >= 3:
+                sys.exit(f"frame {i} impossible après 3 tentatives — arrêt")
+            continue  # même frame, nouvel essai
+        if echecs and echecs[-1] == i:
+            echecs.pop()
+        i += 1
         if i % 60 == 0:
             print(f"  [{i}/{n_frames}] t={t//3600}h{(t%3600)//60:02d} "
                   f"({time.time()-t0:.0f}s)")
