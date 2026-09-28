@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Traffic Map Bruxelles — Métro (démo P0 locale)</title>
+<style>
+  :root {
+    --fond: #0b0e13;
+    --panneau: rgba(15, 19, 27, 0.92);
+    --bord: rgba(255, 255, 255, 0.08);
+    --texte: #e8ecf2;
+    --texte-2: #9aa4b2;
+    --accent: #4da3ff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: var(--fond); }
+  body { font-family: "Segoe UI", system-ui, sans-serif; color: var(--texte); }
+  #carte { position: absolute; inset: 0; cursor: grab; }
+  #carte.drag { cursor: grabbing; }
+
+  .panneau {
+    position: absolute; background: var(--panneau); border: 1px solid var(--bord);
+    border-radius: 10px; backdrop-filter: blur(6px); padding: 12px 14px;
+  }
+
+  /* --- titre + horloge --- */
+  #haut-gauche { top: 14px; left: 14px; }
+  #titre { font-size: 13px; letter-spacing: 2px; color: var(--texte-2); text-transform: uppercase; }
+  #titre b { color: var(--texte); font-size: 15px; letter-spacing: 3px; }
+  #horloge { font-size: 42px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; margin-top: 2px; }
+  #horloge .j1 { font-size: 14px; color: var(--accent); font-weight: 600; margin-left: 6px; }
+  #date-service { font-size: 12px; color: var(--texte-2); }
+
+  /* --- compteurs + légende --- */
+  #haut-droite { top: 14px; right: 14px; min-width: 210px; }
+  #compteur { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  #compteur small { font-size: 12px; color: var(--texte-2); font-weight: 400; display: block; }
+  #legende { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
+  .ligne-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .pastille { width: 22px; height: 8px; border-radius: 4px; display: inline-block; }
+  .ligne-item .nb { margin-left: auto; color: var(--texte-2); font-variant-numeric: tabular-nums; }
+  #stats-jour { margin-top: 10px; font-size: 11px; color: var(--texte-2); line-height: 1.5; }
+
+  /* --- contrôles --- */
+  #controles { left: 14px; right: 14px; bottom: 14px; padding: 10px 16px 12px; }
+  #rangees { display: flex; align-items: center; gap: 14px; }
+  #btn-play {
+    width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--bord);
+    background: var(--accent); color: #04101f; font-size: 18px; cursor: pointer; flex: none;
+  }
+  #btn-play:hover { filter: brightness(1.1); }
+  #timeline { flex: 1; appearance: none; height: 6px; border-radius: 3px;
+    background: linear-gradient(90deg, #1c2531, #26303f); outline: none; }
+  #timeline::-webkit-slider-thumb { appearance: none; width: 16px; height: 16px; border-radius: 50%;
+    background: var(--accent); border: 2px solid #0b0e13; cursor: pointer; }
+  #vitesse { display: flex; gap: 6px; flex: none; }
+  .vit { border: 1px solid var(--bord); background: transparent; color: var(--texte-2);
+    border-radius: 6px; padding: 6px 10px; font-size: 12px; cursor: pointer; font-variant-numeric: tabular-nums; }
+  .vit.actif { background: var(--accent); color: #04101f; border-color: var(--accent); font-weight: 600; }
+  #graduations { position: relative; height: 14px; font-size: 10px; color: var(--texte-2);
+    margin: 6px 62px 0 60px; font-variant-numeric: tabular-nums; }
+  #graduations span { position: absolute; transform: translateX(-50%); }
+  #graduations span:first-child { transform: none; }
+
+  /* --- attribution + fps --- */
+  #attribution { position: absolute; right: 14px; bottom: 92px; font-size: 10px; color: var(--texte-2);
+    text-align: right; line-height: 1.5; }
+  #fps { position: absolute; left: 16px; top: 50%; transform: translateY(-50%);
+    font-size: 10px; color: rgba(154, 164, 178, 0.55); font-variant-numeric: tabular-nums; }
+  #chargement { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 14px; color: var(--texte-2); background: var(--fond); z-index: 10; }
+</style>
+</head>
+<body>
+<canvas id="carte"></canvas>
+<div id="chargement">Décompression des données du réseau…</div>
+
+<div id="haut-gauche" class="panneau">
+  <div id="titre"><b>TRAFFIC MAP</b> BRUXELLES · MÉTRO + TRAM</div>
+  <div id="horloge">--:--</div>
+  <div id="date-service">—</div>
+</div>
+
+<div id="haut-droite" class="panneau">
+  <div id="compteur">0<small>véhicules en circulation</small></div>
+  <div id="legende"></div>
+  <div id="stats-jour"></div>
+</div>
+
+<div id="fps">-- fps</div>
+
+<div id="controles" class="panneau">
+  <div id="rangees">
+    <button id="btn-play" title="Lecture / pause">❚❚</button>
+    <input id="timeline" type="range" min="0" max="90000" step="10" value="18000">
+    <div id="vitesse">
+      <button class="vit" data-v="60">×60</button>
+      <button class="vit actif" data-v="300">×300</button>
+      <button class="vit" data-v="1200">×1200</button>
+    </div>
+  </div>
+  <div id="graduations">
+    <span style="left:0">00:00</span><span style="left:24%">06:00</span><span style="left:48%">12:00</span><span style="left:72%">18:00</span><span style="left:96%">24:00</span>
+  </div>
+</div>
+
+<div id="attribution">
+  Données : STIB-MIVB, CC BY 4.0 (GTFS via data.gtfs.be)<br>
+  Démo P0 locale — horaires théoriques d'un mercredi · reproduction du format « carte qui vit »
+</div>
+
+
+<script>
+(async () => {
+  const [routes, network, lines, metro, tram] = await Promise.all([
+    fetch("data/routes.json").then(r => r.json()),
+    fetch("data/network.json").then(r => r.json()),
+    fetch("data/lines.geojson").then(r => r.json()),
+    fetch("data/metro.bin").then(r => r.arrayBuffer()),
+    fetch("data/tram.bin").then(r => r.arrayBuffer()),
+  ]);
+  window.PAYLOAD = {
+    bins: { metro: new Uint8Array(metro), tram: new Uint8Array(tram) },
+    routes, network, lines,
+  };
+  const s = document.createElement("script");
+  s.src = "app.js";
+  document.body.appendChild(s);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+# Données sources volumineuses (racine) — rebuildables via data.gtfs.be
+/data/
+/data_out/
+# Dépendances de test local
+node_modules/
+package-lock.json
+package.json
+# Artefacts temporaires
+__pycache__/
+*.log
+# Livrables locaux inline (générés par build_standalone*.py)
+app/index.html
+app/index_p1.html
+STIBMAP_Metro_v*_local.html
+STIBMAP_MetroTram_v*_local.html
+# Docs internes (démo business)
+DEMO_SCRIPT.md
+PLAN_STIB_TRAFFIC_MAP.md
