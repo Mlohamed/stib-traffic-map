@@ -210,6 +210,7 @@
       <button class="vit" data-v="60">×60</button>
       <button class="vit actif" data-v="300">×300</button>
       <button class="vit" data-v="1200">×1200</button>
+      <button class="vit" data-v="2400">×2400</button>
     </div>
     <button id="btn-kiosque">▶ Show</button>
   </div>
@@ -257,7 +258,14 @@ for (const mode of Object.keys(PAYLOAD.bins)) {
     const n = vue.getUint16(pos + 5, true);
     const base = pos + 7;
     const span = vue.getUint16(base + (n - 1) * 10 + 8, true); // pas FIXE 10 o/point
-    courses.push({ ref, t0, n, base, span, mode, DT: DTm });
+    const merc = new Float32Array(n * 2);          // Mercator pré-calculé (x,y) — zéro log par frame
+    for (let i = 0; i < n; i++) {
+      const b = base + i * 10;
+      merc[i * 2] = vue.getFloat32(b + 4, true) * Math.PI / 180;
+      const la = vue.getFloat32(b, true) * Math.PI / 180;
+      merc[i * 2 + 1] = Math.log(Math.tan(Math.PI / 4 + la / 2));
+    }
+    courses.push({ ref, t0, n, base, span, mode, DT: DTm, merc });
     pos = base + n * 10;
   }
 }
@@ -427,9 +435,14 @@ function dessiner(t) {
   const pos = { lat: 0, lon: 0 };
   let visibles = 0;
   const parLigne = new Array(ROUTES.length).fill(0);
+  // transform affine factorisée (une fois par frame au lieu de par point)
+  const kx = vueCarte.echelle, kym = vueCarte.echelle;
+  const ox = innerWidth / 2 - vueCarte.cx * kx;
+  const oy = innerHeight / 2 + vueCarte.cy * kym;
   for (const mode of ordre) {
     if (!modesActifs.has(mode)) continue;
     const st = STYLE_MODE[mode];
+    const trailS = mode === "bus" ? 65 : mode === "tram" ? 50 : 42;
     for (const c of courses) {
       if (c.mode !== mode) continue;
       if (c.t0 > t) continue;
@@ -438,21 +451,23 @@ function dessiner(t) {
       parLigne[c.ref]++;
       positionCourse(c, t, pos);
       const iActuel = Math.min(Math.floor((t - c.t0) / c.DT), c.n - 1);
-      const iTrail = Math.max(0, Math.floor((t - TRAIL_S - c.t0) / c.DT));
-      const v = vues[c.mode];
+      const iTrail = Math.max(0, Math.floor((t - trailS - c.t0) / c.DT));
+      const m = c.merc;
       ctx.beginPath();
       for (let i = iTrail; i <= iActuel; i++) {
-        const b = c.base + i * 10;
-        const [px, py] = versEcran(mercX(v.getFloat32(b + 4, true)), mercY(v.getFloat32(b, true)));
+        const px = ox + m[i * 2] * kx;
+        const py = oy - m[i * 2 + 1] * kym;
         if (i === iTrail) ctx.moveTo(px, py); else ctx.lineTo(px, py);
       }
-      const [hx, hy] = versEcran(mercX(pos.lon), mercY(pos.lat));
+      const hx = ox + mercX(pos.lon) * kx;
+      const hy = oy - mercY(pos.lat) * kym;
       ctx.lineTo(hx, hy);
       ctx.strokeStyle = "#" + ROUTES[c.ref].color;
       ctx.globalAlpha = st.alphaTrail;
       ctx.lineWidth = st.epTrail;
       ctx.stroke();
-      ctx.beginPath(); ctx.arc(hx, hy, st.rTete + 2.4, 0, 6.2832);
+      const pulse = mode === "metro" ? 2.4 + Math.sin(t * 0.9 + c.t0 * 0.013) * 0.9 : 2.4;
+      ctx.beginPath(); ctx.arc(hx, hy, st.rTete + pulse, 0, 6.2832);
       ctx.fillStyle = "#" + ROUTES[c.ref].color; ctx.globalAlpha = st.alphaHalo; ctx.fill();
       ctx.beginPath(); ctx.arc(hx, hy, st.rTete, 0, 6.2832); ctx.globalAlpha = 0.95; ctx.fill();
       ctx.beginPath(); ctx.arc(hx, hy, st.rCoeur, 0, 6.2832); ctx.fillStyle = "#fff"; ctx.fill();
