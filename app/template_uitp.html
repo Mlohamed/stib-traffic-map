@@ -32,6 +32,20 @@
   }
   .au-dessus { font-size: 9px; letter-spacing: 3px; color: var(--or); text-transform: uppercase; font-weight: 600; }
 
+  /* ---------- onglets de modes ---------- */
+  #onglets { display: flex; gap: 6px; margin: 8px 0 2px; }
+  .onglet { flex: 1; text-align: center; padding: 5px 0 4px; border: 1px solid var(--bord);
+    border-radius: 3px; cursor: pointer; font-size: 10px; letter-spacing: 1.5px;
+    color: var(--texte-2); text-transform: uppercase; font-weight: 600; transition: all .15s; }
+  .onglet.actif { border-color: var(--or); color: var(--or); background: rgba(212,179,106,0.08); }
+  .onglet .n { font-size: 8.5px; color: var(--texte-3); display: block; letter-spacing: 0.5px; }
+
+  /* ---------- légende scrollable ---------- */
+  #legende { margin-top: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px;
+    max-height: 34vh; overflow-y: auto; padding-right: 6px; }
+  #legende::-webkit-scrollbar { width: 4px; }
+  #legende::-webkit-scrollbar-thumb { background: rgba(212,179,106,0.3); border-radius: 2px; }
+
   /* ---------- bandeau titre (top center) ---------- */
   #bandeau { top: 0; left: 50%; transform: translateX(-50%); text-align: center;
     padding: 14px 34px 12px; border-top: none; border-radius: 0 0 6px 6px; }
@@ -140,9 +154,10 @@
   <h1>Brussels<br><b>Network in Motion</b></h1>
   <div class="filet"></div>
   <div class="sous-titre">
-    L'intégralité du réseau bruxellois — 4 lignes de métro, 18 lignes de tram —
+    L'intégralité du réseau bruxellois — 4 lignes de métro, 18 lignes de tram, 70 lignes de bus —
     reconstruite course par course depuis les données ouvertes GTFS,
     et animée sur une journée complète.<br>
+    <span id="sp-modes" style="font-size:11px; color:var(--accent)">—</span><br>
     <span style="font-size:11px; color:var(--texte-3)">De volledige Brusselse netwerk, herbouwd uit open GTFS-data.</span>
   </div>
   <div class="chiffres">
@@ -180,6 +195,7 @@
     <div class="kpi"><div class="v" id="kpi-arr">—</div><div class="l">Prochain pic</div></div>
   </div>
   <div id="sep-legende"></div>
+  <div id="onglets"></div>
   <div id="legende"></div>
 </div>
 
@@ -321,6 +337,13 @@ let dernierT = performance.now();
 let fpsMoyen = 0;
 const T_MAX = STATS.timeline_end_s;
 const T_LOOP_DEBUT = 4 * 3600;
+// hiérarchie visuelle : le métro domine, le tram suit, le bus tisse la trame de fond
+const STYLE_MODE = {
+  metro: { alphaLigne: 0.36, epLigne: 3.0, alphaHalo: 0.24, rTete: 4.4, rCoeur: 1.9, alphaTrail: 0.60, epTrail: 2.4 },
+  tram:  { alphaLigne: 0.22, epLigne: 1.9, alphaHalo: 0.20, rTete: 3.6, rCoeur: 1.6, alphaTrail: 0.50, epTrail: 2.0 },
+  bus:   { alphaLigne: 0.13, epLigne: 1.1, alphaHalo: 0.14, rTete: 2.7, rCoeur: 1.2, alphaTrail: 0.38, epTrail: 1.5 },
+};
+const modesActifs = new Set(["metro", "tram", "bus"]); // filtres légende
 
 // ============================ CANVAS ============================
 const canvas = document.getElementById("carte");
@@ -356,6 +379,7 @@ const badges = [];
     const co = f.geometry.coordinates[f.geometry.coordinates.length - 1];
     const route = ROUTES[ref];
     badges.push({ ref, line: route.line, color: route.color, texte: route.text_color,
+                  mode: route.mode,
                   terminus: joliNom(f.properties.terminus), mx: mercX(co[0]), my: mercY(co[1]) });
   }
 }
@@ -382,7 +406,7 @@ function dessiner(t) {
   ctx.lineJoin = "round";
   if (!new URLSearchParams(location.search).has("nolines")) {
     for (const f of LIGNES) {
-      const tramMode = f.properties.mode === "tram";
+      const st = STYLE_MODE[f.properties.mode] || STYLE_MODE.bus;
       ctx.beginPath();
       let premier = true;
       for (const [lon, lat] of f.geometry.coordinates) {
@@ -390,49 +414,59 @@ function dessiner(t) {
         if (premier) { ctx.moveTo(px, py); premier = false; } else ctx.lineTo(px, py);
       }
       ctx.strokeStyle = "#" + f.properties.color;
-      ctx.globalAlpha = tramMode ? 0.20 : 0.36;
-      ctx.lineWidth = tramMode ? 1.8 : 3;
+      ctx.globalAlpha = st.alphaLigne;
+      ctx.lineWidth = st.epLigne;
       ctx.stroke();
-      ctx.globalAlpha = tramMode ? 0.05 : 0.10;
-      ctx.lineWidth = tramMode ? 5 : 7;
+      ctx.globalAlpha = st.alphaLigne * 0.28;
+      ctx.lineWidth = st.epLigne * 2.4;
       ctx.stroke();
     }
   }
-  // véhicules
+  // véhicules — dessin par couches de mode (métro au-dessus de tout)
+  const ordre = ["bus", "tram", "metro"];
   const pos = { lat: 0, lon: 0 };
   let visibles = 0;
   const parLigne = new Array(ROUTES.length).fill(0);
-  for (const c of courses) {
-    if (c.t0 > t) continue;
-    if (t > c.t0 + c.span) continue;
-    visibles++;
-    parLigne[c.ref]++;
-    positionCourse(c, t, pos);
-    const iActuel = Math.min(Math.floor((t - c.t0) / c.DT), c.n - 1);
-    const iTrail = Math.max(0, Math.floor((t - TRAIL_S - c.t0) / c.DT));
-    const v = vues[c.mode];
-    ctx.beginPath();
-    for (let i = iTrail; i <= iActuel; i++) {
-      const b = c.base + i * 10;
-      const [px, py] = versEcran(mercX(v.getFloat32(b + 4, true)), mercY(v.getFloat32(b, true)));
-      if (i === iTrail) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  for (const mode of ordre) {
+    if (!modesActifs.has(mode)) continue;
+    const st = STYLE_MODE[mode];
+    for (const c of courses) {
+      if (c.mode !== mode) continue;
+      if (c.t0 > t) continue;
+      if (t > c.t0 + c.span) continue;
+      visibles++;
+      parLigne[c.ref]++;
+      positionCourse(c, t, pos);
+      const iActuel = Math.min(Math.floor((t - c.t0) / c.DT), c.n - 1);
+      const iTrail = Math.max(0, Math.floor((t - TRAIL_S - c.t0) / c.DT));
+      const v = vues[c.mode];
+      ctx.beginPath();
+      for (let i = iTrail; i <= iActuel; i++) {
+        const b = c.base + i * 10;
+        const [px, py] = versEcran(mercX(v.getFloat32(b + 4, true)), mercY(v.getFloat32(b, true)));
+        if (i === iTrail) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      const [hx, hy] = versEcran(mercX(pos.lon), mercY(pos.lat));
+      ctx.lineTo(hx, hy);
+      ctx.strokeStyle = "#" + ROUTES[c.ref].color;
+      ctx.globalAlpha = st.alphaTrail;
+      ctx.lineWidth = st.epTrail;
+      ctx.stroke();
+      ctx.beginPath(); ctx.arc(hx, hy, st.rTete + 2.4, 0, 6.2832);
+      ctx.fillStyle = "#" + ROUTES[c.ref].color; ctx.globalAlpha = st.alphaHalo; ctx.fill();
+      ctx.beginPath(); ctx.arc(hx, hy, st.rTete, 0, 6.2832); ctx.globalAlpha = 0.95; ctx.fill();
+      ctx.beginPath(); ctx.arc(hx, hy, st.rCoeur, 0, 6.2832); ctx.fillStyle = "#fff"; ctx.fill();
     }
-    const [hx, hy] = versEcran(mercX(pos.lon), mercY(pos.lat));
-    ctx.lineTo(hx, hy);
-    ctx.strokeStyle = "#" + ROUTES[c.ref].color;
-    ctx.globalAlpha = 0.55;
-    ctx.lineWidth = 2.2;
-    ctx.stroke();
-    ctx.beginPath(); ctx.arc(hx, hy, 6.6, 0, 6.2832);
-    ctx.fillStyle = "#" + ROUTES[c.ref].color; ctx.globalAlpha = 0.22; ctx.fill();
-    ctx.beginPath(); ctx.arc(hx, hy, 4.1, 0, 6.2832); ctx.globalAlpha = 0.95; ctx.fill();
-    ctx.beginPath(); ctx.arc(hx, hy, 1.8, 0, 6.2832); ctx.fillStyle = "#fff"; ctx.fill();
   }
-  // badges de lignes + terminus
+  // badges de lignes + terminus — visibilité selon modes actifs et zoom
   const echPleine = echellePleine();
   for (const b of badges) {
+    if (!modesActifs.has(b.mode)) continue;
     const [px, py] = versEcran(b.mx, b.my);
     if (px < -40 || px > Wc + 40 || py < -20 || py > Hc + 20) continue;
+    // hiérarchie : métro toujours, tram dès 60 %, bus seulement en zoom
+    const seuil = b.mode === "metro" ? 0 : b.mode === "tram" ? 0.6 : 1.15;
+    if (vueCarte.echelle / echPleine < seuil) continue;
     ctx.globalAlpha = 0.95;
     ctx.fillStyle = "#" + b.color;
     const w = Math.max(20, 8 + b.line.length * 8);
@@ -483,8 +517,46 @@ function phaseJournee(t) {
   if (h < 22) return "Soirée — respiration du réseau";
   return "Fin de service — retour au dépôt";
 }
-{ // légende groupée par mode, badge numéro + compteur live
-  const titres = { metro: "Métro · 4 lignes", tram: "Tram · 18 lignes" };
+{ // légende à onglets par mode, badge numéro + compteur live
+  const titres = { metro: "Métro", tram: "Tram", bus: "Bus" };
+  const elOnglets = document.getElementById("onglets");
+  const parMode = {};
+  for (const r of ROUTES) (parMode[r.mode] = parMode[r.mode] || []).push(r);
+
+  function dessinerOnglets() {
+    elOnglets.innerHTML = "";
+    for (const m of Object.keys(titres)) {
+      if (!parMode[m]) continue;
+      const b = document.createElement("div");
+      b.className = "onglet" + (modesActifs.size === 1 && modesActifs.has(m) ? " actif" : "");
+      const nbVeh = courses.filter(c => c.mode === m).length;
+      b.innerHTML = `${titres[m]}<span class="n">${parMode[m].length} lignes</span>`;
+      b.title = `${titres[m]} : ${nbVeh.toLocaleString("fr-BE")} courses/jour — cliquer pour isoler`;
+      b.addEventListener("click", () => {
+        // bascule : si le mode est le seul actif, tout réafficher ; sinon isoler
+        if (modesActifs.size === 1 && modesActifs.has(m)) {
+          modesActifs.clear();
+          Object.keys(titres).forEach(x => modesActifs.add(x));
+        } else {
+          modesActifs.clear();
+          modesActifs.add(m);
+        }
+        dessinerOnglets();
+        majVisibiliteLegende();
+      });
+      elOnglets.appendChild(b);
+    }
+  }
+  window.__ONGLETS = dessinerOnglets;
+
+  function majVisibiliteLegende() {
+    for (const r of ROUTES) {
+      const el = document.getElementById("li-" + r.ref);
+      if (el) el.style.display = modesActifs.has(r.mode) ? "" : "none";
+    }
+  }
+  window.__VISIBILITE = majVisibiliteLegende;
+
   let dernierMode = null;
   for (const r of ROUTES) {
     if (r.mode !== dernierMode) {
@@ -492,6 +564,7 @@ function phaseJournee(t) {
       const h = document.createElement("div");
       h.className = "titre-mode";
       h.textContent = titres[r.mode] || r.mode;
+      h.dataset.mode = r.mode;
       elLegende.appendChild(h);
     }
     const div = document.createElement("div");
@@ -504,6 +577,7 @@ function phaseJournee(t) {
     div.addEventListener("click", () => { quitterKiosque(); zoomLigne(r.ref); marquerZoom(r.ref); });
     elLegende.appendChild(div);
   }
+  dessinerOnglets();
 }
 function marquerZoom(ref) {
   document.querySelectorAll(".ligne-item").forEach(el => el.classList.remove("zoom-on"));
@@ -645,6 +719,11 @@ function compterJusque(el, cible, duree = 1300) {
 }
 {
   const totalPoints = courses.reduce((s, c) => s + c.n, 0);
+  const modes = { metro: 0, tram: 0, bus: 0 };
+  for (const c of courses) modes[c.mode]++;
+  const elModes = document.getElementById("sp-modes");
+  if (elModes) elModes.textContent =
+    `Métro ${modes.metro.toLocaleString("fr-BE")} · Tram ${modes.tram.toLocaleString("fr-BE")} · Bus ${modes.bus.toLocaleString("fr-BE")}`;
   compterJusque(document.getElementById("sp-courses"), STATS.trips_total);
   compterJusque(document.getElementById("sp-lignes"), STATS.routes_count, 700);
   compterJusque(document.getElementById("sp-pic"), STATS.combined.peak_simultaneous, 900);
@@ -664,12 +743,13 @@ document.getElementById("btn-kiosk-plein").addEventListener("click", () => parti
 
 // ============================ EXPORT TEST + DÉPART ============================
 window.__APP = {
-  courses, ROUTES, STATS, DTS, SCENARIO,
+  courses, ROUTES, STATS, DTS, SCENARIO, badges, modesActifs,
   get tSim() { return tSim; }, set tSim(v) { tSim = v; },
   dessiner: (t) => dessiner(t),
   positions: (t) => {
     const res = []; const pos = { lat: 0, lon: 0 };
     for (const c of courses) {
+      if (!modesActifs.has(c.mode)) continue;
       if (c.t0 > t || t > c.t0 + c.span) continue;
       positionCourse(c, t, pos);
       const [hx, hy] = versEcran(mercX(pos.lon), mercY(pos.lat));
@@ -678,7 +758,6 @@ window.__APP = {
     return res;
   },
   get kiosque() { return kiosque; },
-  badges,
 };
 redimensionner();
 ajusterVue();

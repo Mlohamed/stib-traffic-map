@@ -35,9 +35,10 @@ ROOT = os.path.dirname(HERE)
 DEFAULT_GTFS = os.path.join(ROOT, "data", "gtfs")
 DEFAULT_OUT = os.path.join(ROOT, "data_out")
 
-MODES = {  # route_type GTFS + pas d'échantillonnage (tram plus lent -> dt=15)
+MODES = {  # route_type GTFS + pas d'échantillonnage (bus plus lents -> dt=20)
     "metro": {"route_type": "1", "dt": 10},
     "tram": {"route_type": "0", "dt": 15},
+    "bus": {"route_type": "3", "dt": 20},
 }
 
 

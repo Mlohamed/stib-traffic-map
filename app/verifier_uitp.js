@@ -22,11 +22,14 @@ window.__d = { erreur: null, ok: false };
   window.__d.nbCourses = A.courses.length;
   window.__d.nbRoutes = A.ROUTES.length;
   window.__d.nbBadges = A.badges.length;
-  if (A.courses.length !== 7584) fails.push("courses " + A.courses.length + " != 7584");
-  if (A.ROUTES.length !== 22) fails.push("routes != 22");
-  if (A.badges.length < 20) fails.push("badges terminus " + A.badges.length + " < 20");
+  window.__d.nbBus = A.courses.filter(c => c.mode === "bus").length;
+  if (A.courses.length !== 18731) fails.push("courses " + A.courses.length + " != 18731");
+  if (A.ROUTES.length !== 92) fails.push("routes " + A.ROUTES.length + " != 92");
+  if (A.nbBus !== undefined && A.nbBus !== 11147) fails.push("bus " + A.nbBus + " != 11147");
+  if (A.badges.length < 70) fails.push("badges terminus " + A.badges.length + " < 70");
 
-  for (const [t, min] of [[25580, 150], [58260, 220], [88200, 5]]) {
+  // positions finies à 3 instants clés (seuils réseau complet mesurés au build)
+  for (const [t, min] of [[25580, 500], [58260, 700], [88200, 100]]) {
     const ps = A.positions(t);
     const finies = ps.filter(p => Number.isFinite(p.hx) && Number.isFinite(p.hy)).length;
     if (finies < min) fails.push("t=" + t + " : " + finies + " < " + min);
@@ -53,7 +56,7 @@ function attendreApp(tentative) {
   setTimeout(() => {
   const d = dom.window.__d;
   if (d.erreur) { console.log("KO exception:", d.erreur); process.exit(1); }
-  console.log(`OK  ${d.nbCourses} courses, ${d.nbRoutes} lignes, ${d.nbBadges} badges terminus`);
+  console.log(`OK  ${d.nbCourses} courses (${d.nbBus} bus), ${d.nbRoutes} lignes, ${d.nbBadges} badges terminus`);
   console.log(`OK  positions : 07:07 ${d.t25580} · 16:11 ${d.t58260} · 00:30 ${d.t88200}`);
   let ko = false;
   if (d.fails && d.fails.length) { ko = true; d.fails.forEach(f => console.log("KO " + f)); }

@@ -32,6 +32,20 @@
   }
   .au-dessus { font-size: 9px; letter-spacing: 3px; color: var(--or); text-transform: uppercase; font-weight: 600; }
 
+  /* ---------- onglets de modes ---------- */
+  #onglets { display: flex; gap: 6px; margin: 8px 0 2px; }
+  .onglet { flex: 1; text-align: center; padding: 5px 0 4px; border: 1px solid var(--bord);
+    border-radius: 3px; cursor: pointer; font-size: 10px; letter-spacing: 1.5px;
+    color: var(--texte-2); text-transform: uppercase; font-weight: 600; transition: all .15s; }
+  .onglet.actif { border-color: var(--or); color: var(--or); background: rgba(212,179,106,0.08); }
+  .onglet .n { font-size: 8.5px; color: var(--texte-3); display: block; letter-spacing: 0.5px; }
+
+  /* ---------- légende scrollable ---------- */
+  #legende { margin-top: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px;
+    max-height: 34vh; overflow-y: auto; padding-right: 6px; }
+  #legende::-webkit-scrollbar { width: 4px; }
+  #legende::-webkit-scrollbar-thumb { background: rgba(212,179,106,0.3); border-radius: 2px; }
+
   /* ---------- bandeau titre (top center) ---------- */
   #bandeau { top: 0; left: 50%; transform: translateX(-50%); text-align: center;
     padding: 14px 34px 12px; border-top: none; border-radius: 0 0 6px 6px; }
@@ -140,9 +154,10 @@
   <h1>Brussels<br><b>Network in Motion</b></h1>
   <div class="filet"></div>
   <div class="sous-titre">
-    L'intégralité du réseau bruxellois — 4 lignes de métro, 18 lignes de tram —
+    L'intégralité du réseau bruxellois — 4 lignes de métro, 18 lignes de tram, 70 lignes de bus —
     reconstruite course par course depuis les données ouvertes GTFS,
     et animée sur une journée complète.<br>
+    <span id="sp-modes" style="font-size:11px; color:var(--accent)">—</span><br>
     <span style="font-size:11px; color:var(--texte-3)">De volledige Brusselse netwerk, herbouwd uit open GTFS-data.</span>
   </div>
   <div class="chiffres">
@@ -180,6 +195,7 @@
     <div class="kpi"><div class="v" id="kpi-arr">—</div><div class="l">Prochain pic</div></div>
   </div>
   <div id="sep-legende"></div>
+  <div id="onglets"></div>
   <div id="legende"></div>
 </div>
 
@@ -210,15 +226,16 @@
 
 <script>
 (async () => {
-  const [routes, network, lines, metro, tram] = await Promise.all([
+  const [routes, network, lines, metro, tram, bus] = await Promise.all([
     fetch("data/routes.json").then(r => r.json()),
     fetch("data/network.json").then(r => r.json()),
     fetch("data/lines.geojson").then(r => r.json()),
     fetch("data/metro.bin").then(r => r.arrayBuffer()),
     fetch("data/tram.bin").then(r => r.arrayBuffer()),
+    fetch("data/bus.bin").then(r => r.arrayBuffer()),
   ]);
   window.PAYLOAD = {
-    bins: { metro: new Uint8Array(metro), tram: new Uint8Array(tram) },
+    bins: { metro: new Uint8Array(metro), tram: new Uint8Array(tram), bus: new Uint8Array(bus) },
     routes, network, lines,
   };
   const s = document.createElement("script");

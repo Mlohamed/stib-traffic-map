@@ -30,7 +30,7 @@ def charger_payload():
         "network": json.load(open(os.path.join(OUT, "network.json"), encoding="utf-8")),
         "lines": json.load(open(os.path.join(OUT, "lines.geojson"), encoding="utf-8")),
     }
-    for mode in ("metro", "tram"):
+    for mode in ("metro", "tram", "bus"):
         with open(os.path.join(OUT, f"{mode}.bin"), "rb") as f:
             payload["bins"][mode] = base64.b64encode(f.read()).decode("ascii")
     return payload
@@ -62,15 +62,16 @@ def main():
                     "const u8 = binversBytes(PAYLOAD.bins[mode]);")
     loader = """<script>
 (async () => {
-  const [routes, network, lines, metro, tram] = await Promise.all([
+  const [routes, network, lines, metro, tram, bus] = await Promise.all([
     fetch("data/routes.json").then(r => r.json()),
     fetch("data/network.json").then(r => r.json()),
     fetch("data/lines.geojson").then(r => r.json()),
     fetch("data/metro.bin").then(r => r.arrayBuffer()),
     fetch("data/tram.bin").then(r => r.arrayBuffer()),
+    fetch("data/bus.bin").then(r => r.arrayBuffer()),
   ]);
   window.PAYLOAD = {
-    bins: { metro: new Uint8Array(metro), tram: new Uint8Array(tram) },
+    bins: { metro: new Uint8Array(metro), tram: new Uint8Array(tram), bus: new Uint8Array(bus) },
     routes, network, lines,
   };
   const s = document.createElement("script");
@@ -82,7 +83,7 @@ def main():
     os.makedirs(os.path.join(SITE, "data"), exist_ok=True)
     open(os.path.join(SITE, "index.html"), "w", encoding="utf-8").write(pre + post.replace("</body>", loader + "</body>"))
     open(os.path.join(SITE, "app.js"), "w", encoding="utf-8").write(js)
-    for fn in ("metro.bin", "tram.bin", "routes.json", "network.json", "lines.geojson"):
+    for fn in ("metro.bin", "tram.bin", "bus.bin", "routes.json", "network.json", "lines.geojson"):
         with open(os.path.join(OUT, fn), "rb") as f:
             open(os.path.join(SITE, "data", fn), "wb").write(f.read())
     print(f"site   : index.html {os.path.getsize(os.path.join(SITE,'index.html'))/1e3:.1f} Ko + "
