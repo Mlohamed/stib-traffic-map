@@ -107,6 +107,25 @@ window.__ROUTES_REF = ${JSON.stringify(ROUTES_REF.map(r => [r.ref, r.line, r.col
   const lum = a => a.fond.reduce((s, v) => s + v, 0);
   if (!(lum(A.ambiance(13 * 3600)) > lum(A.ambiance(3 * 3600)))) fails.push("ambiance : midi pas plus clair que 03:00");
 
+  // ---------- v2 : chapitres narratifs (chiffres calculés, un par étape du scénario) ----------
+  if (A.CHAPITRES.length !== A.SCENARIO.length) fails.push("chapitres " + A.CHAPITRES.length + " != étapes " + A.SCENARIO.length);
+  D.chap = [];
+  A.CHAPITRES.forEach((f, i) => {
+    const c = A.chapitre(i), txt = c.titre + " " + c.texte;
+    if (/undefined|NaN|null|n\\/d/.test(txt)) fails.push("chapitre " + (i + 1) + " : valeur manquante « " + txt + " »");
+    D.chap.push(txt.replace(/<[^>]+>/g, ""));
+  });
+  if (!document.getElementById("chapitre").classList.contains("on")) fails.push("chapitre : carton non affiché");
+
+  // ---------- v2 : lien partageable (aller-retour) ----------
+  A.tSim = 61380; A.suivreAuto(61380, "metro");
+  const lien = new URL(A.lienInstant());
+  D.lien = lien.search;
+  if (lien.searchParams.get("t") !== "61380" || !lien.searchParams.has("suivre")) fails.push("lien : " + lien.search);
+  const ic = +lien.searchParams.get("suivre");
+  if (A.courses[ic] !== A.suivi) fails.push("lien : index de course incohérent");
+  A.suivre(null);
+
   // ---------- mentions obligatoires ----------
   const attr = document.getElementById("attribution").textContent;
   if (!/NON AFFILIÉE À LA STIB-MIVB/.test(attr)) fails.push("mention « non affiliée » absente");
@@ -137,6 +156,8 @@ function attendreApp(tentative) {
   console.log(`    profil : pic ${d.profil} · ${d.pics}`);
   console.log(`    suivi : ${d.suivi}`);
   console.log(`    heatmap 17:03 : ${d.heat}`);
+  console.log(`    lien : ${d.lien}`);
+  (d.chap || []).forEach((c, i) => console.log(`    ch.${i + 1} : ${c}`));
   let ko = false;
   if (d.fails && d.fails.length) { ko = true; d.fails.forEach(f => console.log("KO " + f)); }
   console.log(ko ? "\nRÉSULTAT : ÉCHEC" : "\nRÉSULTAT : CONFORME");

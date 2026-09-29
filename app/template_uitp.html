@@ -56,6 +56,24 @@
     letter-spacing: 0.4px; line-height: 1.6; }
   #aide kbd { font-family: inherit; border: 1px solid var(--bord); border-radius: 2px; padding: 0 4px;
     color: var(--texte-2); }
+  /* ---------- chapitres narratifs (kiosque) ---------- */
+  #chapitre { position: absolute; left: 50%; bottom: 150px; transform: translate(-50%, 12px); z-index: 12;
+    width: min(760px, calc(100vw - 560px)); text-align: center; pointer-events: none; opacity: 0;
+    padding: 14px 28px 16px; border-radius: 4px;
+    background: radial-gradient(ellipse at center, rgba(6,9,15,0.92) 0%, rgba(6,9,15,0.82) 60%, rgba(6,9,15,0.55) 100%);
+    border: 1px solid rgba(212,179,106,0.22); box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+    transition: opacity .9s ease, transform .9s ease; text-shadow: 0 1px 8px rgba(0,0,0,0.9); }
+  #chapitre.on { opacity: 1; transform: translate(-50%, 0); }
+  #chapitre .num { font-size: 9px; letter-spacing: 4px; color: var(--or); text-transform: uppercase; font-weight: 600; }
+  #chapitre .titre { font-size: 26px; font-weight: 300; letter-spacing: 1px; margin: 4px 0 6px; }
+  #chapitre .titre b { font-weight: 700; color: var(--or); font-variant-numeric: tabular-nums; }
+  #chapitre .texte { font-size: 13px; color: var(--texte-2); line-height: 1.6; }
+  #chapitre .nl { font-size: 11px; color: var(--texte-3); font-style: italic; margin-top: 2px; }
+  #toast { position: absolute; left: 50%; top: 24px; transform: translateX(-50%); z-index: 30;
+    padding: 8px 16px; background: rgba(9,13,21,0.92); border: 1px solid rgba(212,179,106,0.5);
+    border-radius: 3px; font-size: 11px; letter-spacing: 1px; color: var(--or); opacity: 0;
+    transition: opacity .3s; pointer-events: none; }
+  #toast.on { opacity: 1; }
   #mode-heat { display: none; position: absolute; top: 132px; left: 50%; transform: translateX(-50%);
     padding: 5px 14px; border: 1px solid rgba(255,140,60,0.4); border-radius: 2px; background: rgba(9,13,21,0.85);
     font-size: 9px; letter-spacing: 2px; color: #ffae6b; text-transform: uppercase; }
@@ -255,7 +273,9 @@
 <div id="fps">-- fps</div>
 <div id="badge-kiosque">Présentation automatique — Échap pour reprendre la main</div>
 <div id="mode-heat">Densité de passage · fenêtre ±15 min — H pour revenir</div>
-<div id="aide"><kbd>clic</kbd> suivre un véhicule · <kbd>F</kbd> suivre un métro · <kbd>H</kbd> densité · <kbd>Espace</kbd> lecture · <kbd>Échap</kbd> vue d'ensemble</div>
+<div id="aide"><kbd>clic</kbd> suivre un véhicule · <kbd>F</kbd> suivre un métro · <kbd>H</kbd> densité · <kbd>L</kbd> copier le lien de cet instant · <kbd>Espace</kbd> lecture · <kbd>Échap</kbd> vue d'ensemble</div>
+<div id="chapitre"><div class="num" id="ch-num"></div><div class="titre" id="ch-titre"></div><div class="texte" id="ch-texte"></div><div class="nl" id="ch-nl"></div></div>
+<div id="toast"></div>
 
 <div id="controles" class="panneau">
   <div id="rangees">
@@ -1275,6 +1295,72 @@ function majHud(t, compteurs, maintenant) {
   dessinerProfil(t);
 }
 
+// ============================ CHAPITRES NARRATIFS ============================
+// Chaque phrase est CALCULÉE depuis les données (aucun chiffre écrit à la main).
+function stationParNom(motif) { return STATIONS.findIndex(s => s.nom.toLowerCase().includes(motif)); }
+function passagesStation(k, t0, t1) { // passages de métro (toutes lignes, 2 sens) en station k sur [t0, t1)
+  let n = 0;
+  for (let i = borneSup(PASSAGES_T, t0 - 1); i < PASSAGES_T.length && PASSAGES_T[i] < t1; i++) if (PASSAGES_S[i] === k) n++;
+  return n;
+}
+function actifsParMode(t) {
+  const r = {};
+  for (const m of ["metro", "tram", "bus"]) { let n = 0; pourChaqueActive(m, t, () => n++); r[m] = n; }
+  return r;
+}
+const fmt = n => Math.round(n).toLocaleString("fr-BE");
+const coursesParMode = m => INDEX[m].l.length;
+function premiereSortie() { let m = 0; while (m < PROFIL.length && !PROFIL[m]) m++; return m * 60; }
+const CHAPITRES = [
+  () => { const t0 = premiereSortie(), a = actifsParMode(5.2 * 3600);
+    return { titre: `Le réseau s'éveille à <b>${hhmm(t0)}</b>`,
+      texte: `À 05:12, ${fmt(a.metro + a.tram + a.bus)} véhicules sont déjà en ligne — ${fmt(a.bus)} bus, ${fmt(a.tram)} trams, ${fmt(a.metro)} rames de métro.`,
+      nl: "Het net ontwaakt." }; },
+  () => { const k = stationParNom("arts"), n = k >= 0 ? passagesStation(k, 6 * 3600, 7 * 3600) : 0;
+    return { titre: `Axe est-ouest : lignes <b>1</b> et <b>5</b>`,
+      texte: `Entre 06:00 et 07:00, ${fmt(n)} passages de métro à ${k >= 0 ? STATIONS[k].nom : "n/d"} (toutes lignes, deux sens) — la colonne vertébrale du réseau.`,
+      nl: "De oost-westas: lijnen 1 en 5." }; },
+  () => { const p = PICS[0], k = stationParNom("arts"), n = k >= 0 ? passagesStation(k, 7 * 3600, 8 * 3600) : 0;
+    return { titre: `La pointe du matin monte`,
+      texte: `Entre 07:00 et 08:00, un métro toutes les ${n ? Math.round(3600 / n) : "n/d"} secondes à ${k >= 0 ? STATIONS[k].nom : "n/d"}. La vague culminera à ${fmt(p.n)} véhicules à ${hhmm(p.t)}.`,
+      nl: "Ochtendspits." }; },
+  () => { const a = actifsParMode(9 * 3600);
+    return { titre: `Toute l'amplitude du réseau`,
+      texte: `À 09:00 : ${fmt(a.bus)} bus, ${fmt(a.tram)} trams, ${fmt(a.metro)} métros. Le bus tisse la trame, le tram maille le centre, le métro porte les flux.`,
+      nl: "Het volledige net in beeld." }; },
+  () => { const nL = ROUTES.filter(r => r.mode === "tram").length;
+    return { titre: `Le maillage tram : <b>${nL}</b> lignes`,
+      texte: `${fmt(coursesParMode("tram"))} courses de tram dans la journée : le maillage fin du centre et des grands axes.`,
+      nl: "Het tramnet." }; },
+  () => { const p = PICS[1];
+    return { titre: `Le creux est passé, le soir se prépare`,
+      texte: `Au plus calme de la journée (${hhmm(p.t)}), ${fmt(p.n)} véhicules roulaient encore : ${Math.round(p.n / STATS.combined.peak_simultaneous * 100)} % de la flotte de pointe. Le réseau ne dort jamais en journée.`,
+      nl: "Middagdal." }; },
+  () => { const p = PICS[2];
+    return { titre: `Pic absolu : <b>${fmt(p.n)}</b> véhicules à ${hhmm(p.t)}`,
+      texte: suivi ? `Caméra embarquée : ligne ${ROUTES[suivi.ref].line} vers ${suivi.arrets && suivi.arrets.length ? suivi.arrets[suivi.arrets.length - 1].nom : "son terminus"}.` :
+        `L'heure la plus chargée de la journée.`,
+      nl: "Avondspits — camera aan boord." }; },
+  () => { const a = actifsParMode(22 * 3600);
+    return { titre: `Le réseau respire`,
+      texte: `À 22:00, il reste ${fmt(a.metro + a.tram + a.bus)} véhicules. ${fmt(STATS.trips_total)} courses auront été effectuées sur ${STATS.routes_count} lignes.`,
+      nl: "Het net ademt uit." }; },
+];
+const elChap = document.getElementById("chapitre");
+let chapTimer = 0;
+function afficherChapitre(i) {
+  const f = CHAPITRES[i]; if (!f) return;
+  const c = f();
+  document.getElementById("ch-num").textContent = `Chapitre ${i + 1} / ${CHAPITRES.length}`;
+  document.getElementById("ch-titre").innerHTML = c.titre; // contenu généré localement (chiffres + noms GTFS normalisés)
+  document.getElementById("ch-texte").textContent = c.texte;
+  document.getElementById("ch-nl").textContent = c.nl;
+  elChap.classList.add("on");
+  clearTimeout(chapTimer);
+  chapTimer = setTimeout(() => elChap.classList.remove("on"), 7500);
+}
+function masquerChapitre() { clearTimeout(chapTimer); elChap.classList.remove("on"); }
+
 // ============================ SCÉNARIO PRÉSENTATION ============================
 const SCENARIO = [
   { until: 5.55 * 3600, speed: 900,  cam: null,            zoom: 1 },     // aube, réseau entier
@@ -1297,13 +1383,14 @@ function appliquerEtape(i) {
   }
   if (e.cam) camVers(e.cam, e.zoom); else camVers([bxmin, bymin, bxmax, bymax], 1);
 }
+function appliquerEtapeNarree(i) { appliquerEtape(i); if (kiosque) afficherChapitre(i); }
 function demarrerKiosque() {
   kiosque = true;
   enLecture = true;
   btnPlay.textContent = "❚❚";
   tSim = T_LOOP_DEBUT;
   etapeScenario = 0;
-  appliquerEtape(0);
+  appliquerEtapeNarree(0);
   elBadgeKiosque.style.display = "block";
   document.body.style.cursor = "none";
 }
@@ -1311,6 +1398,7 @@ function quitterKiosque() {
   if (!kiosque) return;
   kiosque = false;
   quitterSuivi(false);
+  masquerChapitre();
   etapeScenario = -1;
   elBadgeKiosque.style.display = "none";
   document.body.style.cursor = "";
@@ -1322,10 +1410,10 @@ function piloterScenario() {
   if (etapeScenario >= 0 && SCENARIO[etapeScenario].suivre && !suivi) { // le véhicule est arrivé : on en prend un autre
     const k = kiosque; kiosque = false; suivreAuto(tSim, SCENARIO[etapeScenario].suivre); kiosque = k;
   }
-  if (tSim >= T_MAX - 60) { tSim = T_LOOP_DEBUT; etapeScenario = 0; appliquerEtape(0); return; }
+  if (tSim >= T_MAX - 60) { tSim = T_LOOP_DEBUT; etapeScenario = 0; appliquerEtapeNarree(0); return; }
   const cible = SCENARIO.findIndex(e => tSim < e.until);
   const i = cible === -1 ? SCENARIO.length - 1 : cible;
-  if (i !== etapeScenario) { etapeScenario = i; appliquerEtape(i); }
+  if (i !== etapeScenario) { etapeScenario = i; appliquerEtapeNarree(i); }
 }
 
 // ============================ BOUCLE ============================
@@ -1402,8 +1490,26 @@ function basculerHeatmap(v) {
   document.getElementById("mode-heat").style.display = heatmap ? "block" : "none";
   return heatmap;
 }
+// ---- lien partageable de l'instant : ?t=…&suivre=<index course>&heat=1 (état restauré au chargement) ----
+const elToast = document.getElementById("toast");
+let toastTimer = 0;
+function toast(msg) { elToast.textContent = msg; elToast.classList.add("on"); clearTimeout(toastTimer); toastTimer = setTimeout(() => elToast.classList.remove("on"), 2200); }
+function lienInstant() {
+  const u = new URL(location.href);
+  u.search = "";
+  u.searchParams.set("t", String(Math.round(tSim)));
+  if (suivi) u.searchParams.set("suivre", String(courses.indexOf(suivi)));
+  if (heatmap) u.searchParams.set("heat", "1");
+  return u.toString();
+}
+async function copierLien() {
+  const l = lienInstant();
+  try { await navigator.clipboard.writeText(l); toast("Lien de cet instant copié — " + hhmm(tSim)); }
+  catch { prompt("Lien de cet instant :", l); }
+}
 addEventListener("keydown", e => {
   if (e.target && e.target.tagName === "INPUT" && e.code !== "Space" && e.code !== "Escape") return;
+  if (e.code === "KeyL") copierLien();
   if (e.code === "Space") { e.preventDefault(); quitterKiosque(); basculerLecture(); }
   if (e.code === "Escape") { quitterKiosque(); if (suivi) quitterSuivi(true); }
   if (e.code === "KeyH") basculerHeatmap();
@@ -1469,6 +1575,7 @@ window.__APP = {
   ambiance, vehiculeSous, candidats: t => ["metro", "tram", "bus"].reduce((s, m) => s + pourChaqueActive(m, t, () => {}), 0),
   benchInfo: () => ({ ...STATS_RENDU }),
   jsFrame: () => { const a = Array.from(JS_FRAME).filter(v => v > 0).sort((x, y) => x - y); return { med: a[a.length >> 1], p95: a[Math.floor(a.length * 0.95)] }; },
+  CHAPITRES, chapitre: i => { const c = CHAPITRES[i](); afficherChapitre(i); return c; }, lienInstant,
   stationsDesservies: (t, fen) => { const d = borneSup(PASSAGES_T, t - fen), f = borneSup(PASSAGES_T, t); return f - d; },
 };
 redimensionner();
@@ -1481,6 +1588,13 @@ if (new URLSearchParams(location.search).has("kiosk")) {
   enLecture = false;
   btnPlay.textContent = "▶";
   tSim = Number(paramT);
+  const iSuivi = Number(Q.get("suivre"));
+  if (Q.has("suivre") && courses[iSuivi] && tSim >= courses[iSuivi].t0 && tSim <= courses[iSuivi].t0 + courses[iSuivi].span) {
+    suivre(courses[iSuivi]);
+    tete(suivi, tSim, tampon); // caméra directement sur le véhicule (pas de travelling depuis la vue d'ensemble)
+    vueCarte.cx = tampon.x; vueCarte.cy = tampon.y; vueCarte.echelle = echSuivi;
+  }
+  if (Q.get("heat") === "1") basculerHeatmap(true);
 } else {
   ajusterVue();
 }

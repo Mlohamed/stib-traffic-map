@@ -33,6 +33,11 @@ const dormir = ms => new Promise(r => setTimeout(r, ms));
 // arrêt garanti de TOUT l'arbre Edge lancé ici (et seulement lui), même sur erreur/Ctrl+C
 function tuerEdge() {
   try { require("child_process").execFileSync("taskkill", ["/PID", String(edge.pid), "/T", "/F"], { stdio: "ignore" }); } catch {}
+  // profil jetable : supprimé après l'arrêt (Edge libère ses verrous en ~1 s)
+  for (let k = 0; k < 20; k++) {
+    try { fs.rmSync(profil, { recursive: true, force: true }); break; }
+    catch { require("child_process").execFileSync(process.execPath, ["-e", "setTimeout(()=>{},150)"]); }
+  }
 }
 process.on("exit", tuerEdge);
 process.on("SIGINT", () => process.exit(130));
@@ -134,6 +139,14 @@ async function charger(q) {
       if (suivi) { await dormir(2600); await capture("04_suivi"); console.log("suivi :", JSON.stringify(suivi)); }
       const hm = await evalJS("window.__APP.basculerHeatmap ? (window.__APP.suivre && window.__APP.suivre(null), window.__APP.basculerHeatmap(true), true) : false");
       if (hm) { await dormir(2400); await capture("05_heatmap_1703"); }
+      // chapitre narratif (étape 3 du kiosque) et lien partageable rouvert à froid
+      if (await evalJS("!!window.__APP.chapitre")) {
+        await charger("?t=26400&pause=1"); await dormir(1200);
+        await evalJS("window.__APP.chapitre(2), true"); await dormir(1400); await capture("06_chapitre");
+        await charger("?t=61380&suivre=12379"); await dormir(2500);
+        console.log("lien rouvert :", await evalJS("JSON.stringify(window.__APP.infoSuivi())"));
+        await capture("07_lien_suivi");
+      }
     }
   } catch (e) { console.error("ERREUR", e.message); process.exitCode = 1; }
   finally {

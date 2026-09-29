@@ -56,6 +56,24 @@
     letter-spacing: 0.4px; line-height: 1.6; }
   #aide kbd { font-family: inherit; border: 1px solid var(--bord); border-radius: 2px; padding: 0 4px;
     color: var(--texte-2); }
+  /* ---------- chapitres narratifs (kiosque) ---------- */
+  #chapitre { position: absolute; left: 50%; bottom: 150px; transform: translate(-50%, 12px); z-index: 12;
+    width: min(760px, calc(100vw - 560px)); text-align: center; pointer-events: none; opacity: 0;
+    padding: 14px 28px 16px; border-radius: 4px;
+    background: radial-gradient(ellipse at center, rgba(6,9,15,0.92) 0%, rgba(6,9,15,0.82) 60%, rgba(6,9,15,0.55) 100%);
+    border: 1px solid rgba(212,179,106,0.22); box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+    transition: opacity .9s ease, transform .9s ease; text-shadow: 0 1px 8px rgba(0,0,0,0.9); }
+  #chapitre.on { opacity: 1; transform: translate(-50%, 0); }
+  #chapitre .num { font-size: 9px; letter-spacing: 4px; color: var(--or); text-transform: uppercase; font-weight: 600; }
+  #chapitre .titre { font-size: 26px; font-weight: 300; letter-spacing: 1px; margin: 4px 0 6px; }
+  #chapitre .titre b { font-weight: 700; color: var(--or); font-variant-numeric: tabular-nums; }
+  #chapitre .texte { font-size: 13px; color: var(--texte-2); line-height: 1.6; }
+  #chapitre .nl { font-size: 11px; color: var(--texte-3); font-style: italic; margin-top: 2px; }
+  #toast { position: absolute; left: 50%; top: 24px; transform: translateX(-50%); z-index: 30;
+    padding: 8px 16px; background: rgba(9,13,21,0.92); border: 1px solid rgba(212,179,106,0.5);
+    border-radius: 3px; font-size: 11px; letter-spacing: 1px; color: var(--or); opacity: 0;
+    transition: opacity .3s; pointer-events: none; }
+  #toast.on { opacity: 1; }
   #mode-heat { display: none; position: absolute; top: 132px; left: 50%; transform: translateX(-50%);
     padding: 5px 14px; border: 1px solid rgba(255,140,60,0.4); border-radius: 2px; background: rgba(9,13,21,0.85);
     font-size: 9px; letter-spacing: 2px; color: #ffae6b; text-transform: uppercase; }
@@ -255,7 +273,9 @@
 <div id="fps">-- fps</div>
 <div id="badge-kiosque">Présentation automatique — Échap pour reprendre la main</div>
 <div id="mode-heat">Densité de passage · fenêtre ±15 min — H pour revenir</div>
-<div id="aide"><kbd>clic</kbd> suivre un véhicule · <kbd>F</kbd> suivre un métro · <kbd>H</kbd> densité · <kbd>Espace</kbd> lecture · <kbd>Échap</kbd> vue d'ensemble</div>
+<div id="aide"><kbd>clic</kbd> suivre un véhicule · <kbd>F</kbd> suivre un métro · <kbd>H</kbd> densité · <kbd>L</kbd> copier le lien de cet instant · <kbd>Espace</kbd> lecture · <kbd>Échap</kbd> vue d'ensemble</div>
+<div id="chapitre"><div class="num" id="ch-num"></div><div class="titre" id="ch-titre"></div><div class="texte" id="ch-texte"></div><div class="nl" id="ch-nl"></div></div>
+<div id="toast"></div>
 
 <div id="controles" class="panneau">
   <div id="rangees">
