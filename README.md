@@ -7,11 +7,11 @@ https://mlohamed.github.io/stib-traffic-map/
 
 | | |
 |---|---|
-| Courses simulées (mercredi type) | **7 584** — métro 1 383 · tram 6 201 |
-| Lignes | **22** — 4 métro, 18 tram, couleurs officielles |
-| Véhicules au pic | **260 simultanés** (16:10) · 233 à la pointe du matin (07:07) |
-| Trajectoires calculées | **967 475** points interpolés sur les shapes GTFS |
-| Données embarquées | 9,7 Mo de binaires compacts (métro pas 10 s, tram pas 15 s) |
+| Courses simulées (mercredi type) | **18 731** — métro 1 383 · tram 6 201 · bus 11 147 |
+| Lignes | **92** — 4 métro, 18 tram, 70 bus, couleurs officielles |
+| Véhicules au pic | **769 simultanés** (17:03) · 582 à la pointe du matin (07:07) |
+| Trajectoires calculées | **> 2 400 000** points interpolés sur les shapes GTFS |
+| Données embarquées | 21,3 Mo de binaires compacts (métro 10 s · tram 15 s · bus 20 s) |
 | Dépendances runtime | **zéro** — Canvas 2D natif, aucun framework, aucune clé API |
 
 *Visualisation indépendante de démonstration — non affiliée à la STIB-MIVB.
@@ -28,7 +28,7 @@ Le splash s'ouvre sur les chiffres du réseau, puis deux boutons :
 sur la boucle 2/6, maillage tram, pointe du soir, soirée accélérée — boucle
 parfaite pour un stand ou un écran de hall).
 
-**2. Hors ligne** — `STIBMAP_UITP_v2.0_local.html` (13,4 Mo, double-clic,
+**2. Hors ligne** — `STIBMAP_UITP_v2.0_local.html` (29,8 Mo, double-clic,
 aucun serveur). Même expérience, données inline.
 
 ## Ce qu'on voit
@@ -51,7 +51,7 @@ aucun serveur). Même expérience, données inline.
 
 ```bash
 python pipeline/build_p0.py            # GTFS -> metro.bin (1 383 courses, 0 rejet)
-python pipeline/build_p1.py            # + tram.bin (6 201 courses, 0 rejet)
+python pipeline/build_p1.py            # + tram.bin + bus.bin (6 201 + 11 147 courses, 0 rejet)
 python pipeline/validate_p0.py         # 24 contrôles de cohérence -> CONFORME
 python app/build_standalone_uitp.py    # assemble local 13,4 Mo + site (shell + app.js + data/)
 node app/verifier_uitp.js              # sonde DOM : positions écran finies -> CONFORME
@@ -81,7 +81,7 @@ boucles de terminus. Le pipeline ne dépend d'aucun paquet tiers.
 | P0 | Métro, 4 lignes | ✅ livré |
 | P1 | + tram (18 lignes) | ✅ livré |
 | v2 | Édition vitrine (splash, présentation auto, badges terminus) | ✅ livré |
-| P2 | + bus + Noctis (70 lignes), découpage horaire 60 min | chiffré, prêt |
+| P2 | + bus (70 lignes, 11 147 courses) — réseau complet 92 lignes | ✅ livré |
 | P3 | Journée observée MobilityTwin (2,97 M positions réelles), perturbations | prospectif |
 
 ---
