@@ -3,14 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Traffic Map Bruxelles — Métro (démo P0 locale)</title>
+<title>Brussels Network in Motion — STIB-MIVB Open Data Showcase</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%23070b12'/%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%23d4b36a' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23d4b36a'/%3E%3C/svg%3E">
 <style>
   :root {
-    --fond: #0b0e13;
-    --panneau: rgba(15, 19, 27, 0.92);
-    --bord: rgba(255, 255, 255, 0.08);
-    --texte: #e8ecf2;
-    --texte-2: #9aa4b2;
+    --fond: #070b12;
+    --panneau: rgba(9, 13, 21, 0.82);
+    --bord: rgba(255, 255, 255, 0.09);
+    --or: #d4b36a;
+    --or-sombre: #9a7f47;
+    --texte: #eef1f6;
+    --texte-2: #96a0ad;
+    --texte-3: #5d6773;
     --accent: #4da3ff;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -18,87 +22,180 @@
   body { font-family: "Segoe UI", system-ui, sans-serif; color: var(--texte); }
   #carte { position: absolute; inset: 0; cursor: grab; }
   #carte.drag { cursor: grabbing; }
+  #vignette { position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 45%, transparent 52%, rgba(3, 6, 11, 0.62) 100%); }
 
   .panneau {
     position: absolute; background: var(--panneau); border: 1px solid var(--bord);
-    border-radius: 10px; backdrop-filter: blur(6px); padding: 12px 14px;
+    border-radius: 4px; backdrop-filter: blur(10px); padding: 14px 18px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
   }
+  .au-dessus { font-size: 9px; letter-spacing: 3px; color: var(--or); text-transform: uppercase; font-weight: 600; }
 
-  /* --- titre + horloge --- */
-  #haut-gauche { top: 14px; left: 14px; }
-  #titre { font-size: 13px; letter-spacing: 2px; color: var(--texte-2); text-transform: uppercase; }
-  #titre b { color: var(--texte); font-size: 15px; letter-spacing: 3px; }
-  #horloge { font-size: 42px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; margin-top: 2px; }
-  #horloge .j1 { font-size: 14px; color: var(--accent); font-weight: 600; margin-left: 6px; }
-  #date-service { font-size: 12px; color: var(--texte-2); }
+  /* ---------- bandeau titre (top center) ---------- */
+  #bandeau { top: 0; left: 50%; transform: translateX(-50%); text-align: center;
+    padding: 14px 34px 12px; border-top: none; border-radius: 0 0 6px 6px; }
+  #bandeau h1 { font-size: 15px; font-weight: 600; letter-spacing: 5px; text-transform: uppercase; }
+  #bandeau h1 .sep { color: var(--or); }
+  #bandeau .nl { font-size: 10px; letter-spacing: 3px; color: var(--texte-2); text-transform: uppercase; margin-top: 3px; }
+  #badge-edition { display: inline-block; margin-top: 8px; padding: 3px 12px;
+    border: 1px solid rgba(212, 179, 106, 0.45); border-radius: 2px;
+    font-size: 8.5px; letter-spacing: 2.5px; color: var(--or); text-transform: uppercase; }
 
-  /* --- compteurs + légende --- */
-  #haut-droite { top: 14px; right: 14px; min-width: 210px; }
-  #compteur { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  #compteur small { font-size: 12px; color: var(--texte-2); font-weight: 400; display: block; }
-  #legende { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
-  .ligne-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-  .pastille { width: 22px; height: 8px; border-radius: 4px; display: inline-block; }
-  .ligne-item .nb { margin-left: auto; color: var(--texte-2); font-variant-numeric: tabular-nums; }
-  #stats-jour { margin-top: 10px; font-size: 11px; color: var(--texte-2); line-height: 1.5; }
+  /* ---------- horloge ---------- */
+  #haut-gauche { top: 16px; left: 16px; min-width: 230px; }
+  #horloge { font-size: 46px; font-weight: 200; font-variant-numeric: tabular-nums;
+    line-height: 1.05; letter-spacing: 2px; margin: 4px 0 2px; }
+  #horloge .j1 { font-size: 13px; color: var(--accent); font-weight: 600; margin-left: 8px; letter-spacing: 1px; }
+  #phase-journee { font-size: 11px; color: var(--texte-2); font-style: italic; }
 
-  /* --- contrôles --- */
-  #controles { left: 14px; right: 14px; bottom: 14px; padding: 10px 16px 12px; }
+  /* ---------- réseau + légende ---------- */
+  #haut-droite { top: 16px; right: 16px; width: 252px; }
+  #kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin: 8px 0 4px; }
+  .kpi .v { font-size: 21px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .kpi .l { font-size: 8.5px; letter-spacing: 1.6px; color: var(--texte-2); text-transform: uppercase; }
+  #sep-legende { height: 1px; margin: 10px 0 2px;
+    background: linear-gradient(90deg, rgba(212,179,106,0.5), transparent); }
+  #legende { margin-top: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; }
+  .titre-mode { grid-column: 1 / -1; font-size: 9px; letter-spacing: 2px; color: var(--or);
+    margin: 5px 0 2px; font-weight: 700; text-transform: uppercase; }
+  .ligne-item { display: flex; align-items: center; gap: 7px; font-size: 11.5px;
+    cursor: pointer; padding: 1px 3px; border-radius: 3px; }
+  .ligne-item:hover { background: rgba(255, 255, 255, 0.05); }
+  .ligne-item.zoom-on { background: rgba(212, 179, 106, 0.12); }
+  .num-badge { min-width: 20px; height: 15px; border-radius: 3px; display: inline-flex;
+    align-items: center; justify-content: center; font-size: 9.5px; font-weight: 700; }
+  .ligne-item .nb { margin-left: auto; color: var(--texte-2); font-variant-numeric: tabular-nums; font-size: 10.5px; }
+
+  /* ---------- contrôles ---------- */
+  #controles { left: 16px; right: 16px; bottom: 16px; padding: 12px 18px 12px; }
   #rangees { display: flex; align-items: center; gap: 14px; }
-  #btn-play {
-    width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--bord);
-    background: var(--accent); color: #04101f; font-size: 18px; cursor: pointer; flex: none;
-  }
-  #btn-play:hover { filter: brightness(1.1); }
-  #timeline { flex: 1; appearance: none; height: 6px; border-radius: 3px;
-    background: linear-gradient(90deg, #1c2531, #26303f); outline: none; }
-  #timeline::-webkit-slider-thumb { appearance: none; width: 16px; height: 16px; border-radius: 50%;
-    background: var(--accent); border: 2px solid #0b0e13; cursor: pointer; }
-  #vitesse { display: flex; gap: 6px; flex: none; }
+  #btn-play { width: 44px; height: 44px; border-radius: 50%; border: 1px solid rgba(212,179,106,0.5);
+    background: transparent; color: var(--or); font-size: 16px; cursor: pointer; flex: none; transition: all .2s; }
+  #btn-play:hover { background: var(--or); color: #0a0d15; }
+  #timeline { flex: 1; appearance: none; height: 4px; border-radius: 2px;
+    background: linear-gradient(90deg, #1a2230, #252f3f); outline: none; }
+  #timeline::-webkit-slider-thumb { appearance: none; width: 15px; height: 15px; border-radius: 50%;
+    background: var(--or); border: 2px solid #070b12; cursor: pointer;
+    box-shadow: 0 0 0 3px rgba(212,179,106,0.2); }
+  #vitesse { display: flex; gap: 5px; flex: none; }
   .vit { border: 1px solid var(--bord); background: transparent; color: var(--texte-2);
-    border-radius: 6px; padding: 6px 10px; font-size: 12px; cursor: pointer; font-variant-numeric: tabular-nums; }
-  .vit.actif { background: var(--accent); color: #04101f; border-color: var(--accent); font-weight: 600; }
-  #graduations { position: relative; height: 14px; font-size: 10px; color: var(--texte-2);
-    margin: 6px 62px 0 60px; font-variant-numeric: tabular-nums; }
+    border-radius: 3px; padding: 5px 10px; font-size: 11px; cursor: pointer; font-variant-numeric: tabular-nums; }
+  .vit.actif { border-color: var(--or); color: var(--or); }
+  #btn-kiosque { border: 1px solid rgba(212,179,106,0.5); background: transparent; color: var(--or);
+    border-radius: 3px; padding: 8px 14px; font-size: 10px; letter-spacing: 2px; cursor: pointer;
+    text-transform: uppercase; font-weight: 600; flex: none; }
+  #btn-kiosque:hover { background: var(--or); color: #0a0d15; }
+  #graduations { position: relative; height: 13px; font-size: 9.5px; color: var(--texte-3);
+    margin: 6px 64px 0 58px; font-variant-numeric: tabular-nums; }
   #graduations span { position: absolute; transform: translateX(-50%); }
   #graduations span:first-child { transform: none; }
 
-  /* --- attribution + fps --- */
-  #attribution { position: absolute; right: 14px; bottom: 92px; font-size: 10px; color: var(--texte-2);
-    text-align: right; line-height: 1.5; }
-  #fps { position: absolute; left: 16px; top: 50%; transform: translateY(-50%);
-    font-size: 10px; color: rgba(154, 164, 178, 0.55); font-variant-numeric: tabular-nums; }
-  #chargement { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    font-size: 14px; color: var(--texte-2); background: var(--fond); z-index: 10; }
+  /* ---------- attribution / fps / kiosque ---------- */
+  #attribution { position: absolute; right: 16px; bottom: 96px; font-size: 9px;
+    color: var(--texte-3); text-align: right; line-height: 1.6; letter-spacing: 0.3px; }
+  #fps { position: absolute; left: 20px; top: 50%; transform: translateY(-50%);
+    font-size: 9px; color: rgba(93, 103, 115, 0.6); font-variant-numeric: tabular-nums; }
+  #badge-kiosque { position: absolute; top: 96px; left: 50%; transform: translateX(-50%);
+    display: none; padding: 6px 16px; border: 1px solid rgba(212,179,106,0.35); border-radius: 2px;
+    background: rgba(9,13,21,0.85); font-size: 9px; letter-spacing: 2px; color: var(--or);
+    text-transform: uppercase; }
+
+  /* ---------- splash ---------- */
+  #splash { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: radial-gradient(ellipse at 50% 40%, #0d1420 0%, #070b12 65%);
+    transition: opacity 1.1s ease; }
+  #splash.parti { opacity: 0; pointer-events: none; }
+  #splash .sur-titre { font-size: 10px; letter-spacing: 6px; color: var(--texte-2);
+    text-transform: uppercase; margin-bottom: 22px; }
+  #splash h1 { font-size: clamp(28px, 4.5vw, 52px); font-weight: 200; letter-spacing: 12px;
+    text-transform: uppercase; line-height: 1.25; }
+  #splash h1 b { font-weight: 700; color: var(--or); }
+  #splash .filet { width: 72px; height: 1px; background: var(--or); margin: 26px 0; opacity: 0.8; }
+  #splash .sous-titre { font-size: 13px; color: var(--texte-2); letter-spacing: 1px;
+    max-width: 640px; line-height: 1.8; padding: 0 24px; }
+  #splash .chiffres { display: flex; gap: 46px; margin: 34px 0 8px; }
+  #splash .chiffres .c { text-align: center; }
+  #splash .chiffres .v { font-size: 27px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #splash .chiffres .l { font-size: 8.5px; letter-spacing: 2px; color: var(--texte-2); text-transform: uppercase; margin-top: 3px; }
+  #splash .boutons { display: flex; gap: 18px; margin-top: 34px; }
+  #splash button { padding: 14px 34px; font-size: 11px; letter-spacing: 3px; text-transform: uppercase;
+    cursor: pointer; transition: all .25s; font-weight: 600; }
+  #btn-libre { background: var(--or); color: #0a0d15; border: 1px solid var(--or); }
+  #btn-libre:hover { filter: brightness(1.12); }
+  #btn-kiosk-plein { background: transparent; color: var(--or); border: 1px solid var(--or-sombre); }
+  #btn-kiosk-plein:hover { border-color: var(--or); }
+  #splash .mentions { position: absolute; bottom: 22px; font-size: 8.5px; color: var(--texte-3);
+    letter-spacing: 1px; line-height: 1.7; }
 </style>
 </head>
 <body>
 <canvas id="carte"></canvas>
-<div id="chargement">Décompression des données du réseau…</div>
+<div id="vignette"></div>
+
+<!-- ================= SPLASH ================= -->
+<div id="splash">
+  <div class="sur-titre">STIB-MIVB · Brussels Open Data · UITP Showcase Edition</div>
+  <h1>Brussels<br><b>Network in Motion</b></h1>
+  <div class="filet"></div>
+  <div class="sous-titre">
+    L'intégralité du réseau bruxellois — 4 lignes de métro, 18 lignes de tram —
+    reconstruite course par course depuis les données ouvertes GTFS,
+    et animée sur une journée complète.<br>
+    <span style="font-size:11px; color:var(--texte-3)">De volledige Brusselse netwerk, herbouwd uit open GTFS-data.</span>
+  </div>
+  <div class="chiffres">
+    <div class="c"><div class="v" id="sp-courses">—</div><div class="l">Courses / jour</div></div>
+    <div class="c"><div class="v" id="sp-lignes">—</div><div class="l">Lignes</div></div>
+    <div class="c"><div class="v" id="sp-pic">—</div><div class="l">Véhicules au pic</div></div>
+    <div class="c"><div class="v" id="sp-points">—</div><div class="l">Trajectoires calculées</div></div>
+  </div>
+  <div class="boutons">
+    <button id="btn-libre">Explorer le réseau</button>
+    <button id="btn-kiosk-plein">▶ Présentation automatique</button>
+  </div>
+  <div class="mentions">
+    VISUALISATION INDÉPENDANTE DE DÉMONSTRATION — NON AFFILIÉE À LA STIB-MIVB · UITP ILLUSTRATIF<br>
+    DONNÉES OUVERTES STIB-MIVB, CC BY 4.0 (GTFS VIA DATA.GTFS.BE) · HORAIRE THÉORIQUE D'UN MERCREDI
+  </div>
+</div>
+
+<div id="bandeau" class="panneau">
+  <h1>Brussels <span class="sep">·</span> Network in Motion</h1>
+  <div class="nl">Het Brusselse net in beweging — STIB-MIVB</div>
+  <div id="badge-edition">Simulation théorique · Wednesday service</div>
+</div>
 
 <div id="haut-gauche" class="panneau">
-  <div id="titre"><b>TRAFFIC MAP</b> BRUXELLES · MÉTRO + TRAM</div>
+  <div class="au-dessus">Heure de simulation</div>
   <div id="horloge">--:--</div>
-  <div id="date-service">—</div>
+  <div id="phase-journee">—</div>
 </div>
 
 <div id="haut-droite" class="panneau">
-  <div id="compteur">0<small>véhicules en circulation</small></div>
+  <div class="au-dessus">Le réseau, maintenant</div>
+  <div id="kpis">
+    <div class="kpi"><div class="v" id="kpi-veh">0</div><div class="l">Véhicules en ligne</div></div>
+    <div class="kpi"><div class="v" id="kpi-arr">—</div><div class="l">Prochain pic</div></div>
+  </div>
+  <div id="sep-legende"></div>
   <div id="legende"></div>
-  <div id="stats-jour"></div>
 </div>
 
 <div id="fps">-- fps</div>
+<div id="badge-kiosque">Présentation automatique — Échap pour reprendre la main</div>
 
 <div id="controles" class="panneau">
   <div id="rangees">
-    <button id="btn-play" title="Lecture / pause">❚❚</button>
+    <button id="btn-play" title="Lecture / pause (Espace)">❚❚</button>
     <input id="timeline" type="range" min="0" max="90000" step="10" value="18000">
     <div id="vitesse">
       <button class="vit" data-v="60">×60</button>
       <button class="vit actif" data-v="300">×300</button>
       <button class="vit" data-v="1200">×1200</button>
     </div>
+    <button id="btn-kiosque">▶ Show</button>
   </div>
   <div id="graduations">
     <span style="left:0">00:00</span><span style="left:24%">06:00</span><span style="left:48%">12:00</span><span style="left:72%">18:00</span><span style="left:96%">24:00</span>
@@ -106,8 +203,8 @@
 </div>
 
 <div id="attribution">
-  Données : STIB-MIVB, CC BY 4.0 (GTFS via data.gtfs.be)<br>
-  Démo P0 locale — horaires théoriques d'un mercredi · reproduction du format « carte qui vit »
+  ÉDITION VITRINE — DÉMO INDÉPENDANTE, NON AFFILIÉE À LA STIB-MIVB<br>
+  Données ouvertes STIB-MIVB, CC BY 4.0 (GTFS via data.gtfs.be) · horaires théoriques
 </div>
 
 
