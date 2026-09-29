@@ -20,8 +20,45 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: var(--fond); }
   body { font-family: "Segoe UI", system-ui, sans-serif; color: var(--texte); }
+  body { transition: background-color 1.2s linear; }
+  #fond { position: absolute; left: 0; top: 0; pointer-events: none; transform-origin: 0 0; will-change: transform; }
   #carte { position: absolute; inset: 0; cursor: grab; }
   #carte.drag { cursor: grabbing; }
+  #carte.survol { cursor: pointer; }
+  #ciel { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 1.5s linear; }
+
+  /* ---------- carte véhicule suivi ---------- */
+  #suivi { top: 150px; left: 16px; width: 252px; display: none; }
+  #suivi.on { display: block; }
+  #suivi .tete { display: flex; align-items: center; gap: 10px; margin: 8px 0 6px; }
+  #suivi .gros-badge { min-width: 38px; height: 28px; border-radius: 4px; display: inline-flex;
+    align-items: center; justify-content: center; font-size: 16px; font-weight: 700; padding: 0 6px; }
+  #suivi .dir { font-size: 13px; font-weight: 600; line-height: 1.25; }
+  #suivi .dir small { display: block; font-size: 9px; letter-spacing: 1.5px; color: var(--texte-2);
+    text-transform: uppercase; font-weight: 600; }
+  #suivi .rang { display: flex; justify-content: space-between; font-size: 11.5px; padding: 4px 0;
+    border-top: 1px solid var(--bord); }
+  #suivi .rang span:first-child { color: var(--texte-2); }
+  #suivi .rang b { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+  #suivi .fermer { position: absolute; top: 8px; right: 10px; cursor: pointer; color: var(--texte-2);
+    font-size: 14px; border: none; background: none; }
+  #suivi .progres { height: 3px; background: rgba(255,255,255,0.08); border-radius: 2px; margin: 6px 0 2px; }
+  #suivi .progres div { height: 100%; border-radius: 2px; background: var(--or); width: 0; }
+
+  /* ---------- sparkline profil horaire ---------- */
+  #piste { flex: 1; position: relative; display: flex; flex-direction: column; justify-content: flex-end; }
+  #profil { display: block; width: 100%; height: 34px; cursor: crosshair; }
+  #profil-lecture { position: absolute; top: -16px; font-size: 9.5px; color: var(--texte);
+    background: rgba(9,13,21,0.9); border: 1px solid var(--bord); padding: 1px 6px; border-radius: 2px;
+    pointer-events: none; display: none; white-space: nowrap; transform: translateX(-50%);
+    font-variant-numeric: tabular-nums; }
+  #aide { position: absolute; left: 16px; bottom: 138px; font-size: 9px; color: var(--texte-3);
+    letter-spacing: 0.4px; line-height: 1.6; }
+  #aide kbd { font-family: inherit; border: 1px solid var(--bord); border-radius: 2px; padding: 0 4px;
+    color: var(--texte-2); }
+  #mode-heat { display: none; position: absolute; top: 132px; left: 50%; transform: translateX(-50%);
+    padding: 5px 14px; border: 1px solid rgba(255,140,60,0.4); border-radius: 2px; background: rgba(9,13,21,0.85);
+    font-size: 9px; letter-spacing: 2px; color: #ffae6b; text-transform: uppercase; }
   #vignette { position: absolute; inset: 0; pointer-events: none;
     background: radial-gradient(ellipse at 50% 45%, transparent 52%, rgba(3, 6, 11, 0.62) 100%); }
 
@@ -106,7 +143,8 @@
   #graduations span:first-child { transform: none; }
 
   /* ---------- attribution / fps / kiosque ---------- */
-  #attribution { position: absolute; right: 16px; bottom: 96px; font-size: 9px;
+  #piste #timeline { flex: none; width: 100%; }
+  #attribution { position: absolute; right: 16px; bottom: 130px; font-size: 9px;
     color: var(--texte-3); text-align: right; line-height: 1.6; letter-spacing: 0.3px; }
   #fps { position: absolute; left: 20px; top: 50%; transform: translateY(-50%);
     font-size: 9px; color: rgba(93, 103, 115, 0.6); font-variant-numeric: tabular-nums; }
@@ -145,6 +183,8 @@
 </style>
 </head>
 <body>
+<div id="ciel"></div>
+<canvas id="fond"></canvas>
 <canvas id="carte"></canvas>
 <div id="vignette"></div>
 
@@ -199,17 +239,37 @@
   <div id="legende"></div>
 </div>
 
+<div id="suivi" class="panneau">
+  <button class="fermer" id="suivi-fermer" title="Quitter le suivi (Échap)">✕</button>
+  <div class="au-dessus">Véhicule suivi</div>
+  <div class="tete"><span class="gros-badge" id="sv-badge">—</span>
+    <div class="dir"><small id="sv-mode">—</small>→ <span id="sv-terminus">—</span></div></div>
+  <div class="progres"><div id="sv-progres"></div></div>
+  <div class="rang"><span>Prochain arrêt</span><b id="sv-prochain">—</b></div>
+  <div class="rang"><span>Arrivée</span><b id="sv-eta">—</b></div>
+  <div class="rang"><span>Arrêts restants</span><b id="sv-restants">—</b></div>
+  <div class="rang"><span>Vitesse commerciale</span><b id="sv-vitesse">—</b></div>
+  <div class="rang"><span>Terminus prévu</span><b id="sv-fin">—</b></div>
+</div>
+
 <div id="fps">-- fps</div>
 <div id="badge-kiosque">Présentation automatique — Échap pour reprendre la main</div>
+<div id="mode-heat">Densité de passage · fenêtre ±15 min — H pour revenir</div>
+<div id="aide"><kbd>clic</kbd> suivre un véhicule · <kbd>F</kbd> suivre un métro · <kbd>H</kbd> densité · <kbd>Espace</kbd> lecture · <kbd>Échap</kbd> vue d'ensemble</div>
 
 <div id="controles" class="panneau">
   <div id="rangees">
     <button id="btn-play" title="Lecture / pause (Espace)">❚❚</button>
-    <input id="timeline" type="range" min="0" max="90000" step="10" value="18000">
+    <div id="piste">
+      <div id="profil-lecture"></div>
+      <canvas id="profil" title="Véhicules en ligne, minute par minute — cliquer pour s'y rendre"></canvas>
+      <input id="timeline" type="range" min="0" max="90000" step="10" value="18000">
+    </div>
     <div id="vitesse">
       <button class="vit" data-v="60">×60</button>
       <button class="vit actif" data-v="300">×300</button>
       <button class="vit" data-v="1200">×1200</button>
+      <button class="vit" data-v="2400">×2400</button>
     </div>
     <button id="btn-kiosque">▶ Show</button>
   </div>
@@ -226,17 +286,18 @@
 
 <script>
 (async () => {
-  const [routes, network, lines, metro, tram, bus] = await Promise.all([
+  const [routes, network, lines, metro, tram, bus, stops] = await Promise.all([
     fetch("data/routes.json").then(r => r.json()),
     fetch("data/network.json").then(r => r.json()),
     fetch("data/lines.geojson").then(r => r.json()),
     fetch("data/metro.bin").then(r => r.arrayBuffer()),
     fetch("data/tram.bin").then(r => r.arrayBuffer()),
     fetch("data/bus.bin").then(r => r.arrayBuffer()),
+    fetch("data/stops.json").then(r => r.ok ? r.json() : null).catch(() => null),
   ]);
   window.PAYLOAD = {
     bins: { metro: new Uint8Array(metro), tram: new Uint8Array(tram), bus: new Uint8Array(bus) },
-    routes, network, lines,
+    routes, network, lines, stops,
   };
   const s = document.createElement("script");
   s.src = "app.js";

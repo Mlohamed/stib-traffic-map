@@ -33,7 +33,14 @@ for (const mode of Object.keys(PAYLOAD.bins)) {
     const n = vue.getUint16(pos + 5, true);
     const base = pos + 7;
     const span = vue.getUint16(base + (n - 1) * 10 + 8, true); // pas FIXE 10 o/point
-    courses.push({ ref, t0, n, base, span, mode, DT: DTm });
+    const merc = new Float32Array(n * 2);          // Mercator pré-calculé (x,y) — zéro log par frame
+    for (let i = 0; i < n; i++) {
+      const b = base + i * 10;
+      merc[i * 2] = vue.getFloat32(b + 4, true) * Math.PI / 180;
+      const la = vue.getFloat32(b, true) * Math.PI / 180;
+      merc[i * 2 + 1] = Math.log(Math.tan(Math.PI / 4 + la / 2));
+    }
+    courses.push({ ref, t0, n, base, span, mode, DT: DTm, merc });
     pos = base + n * 10;
   }
 }
@@ -80,6 +87,7 @@ function bboxDeRefs(refs) {
   }
   return [x0, y0, x1, y1];
 }
+let jetonCam = 0; // une seule animation caméra à la fois (les précédentes s'arrêtent)
 function camVers(bbox, zoom = 1, duree = 1800) {
   const [x0, y0, x1, y1] = bbox;
   const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
@@ -87,12 +95,15 @@ function camVers(bbox, zoom = 1, duree = 1800) {
                             (innerHeight - 2 * MARGE) / Math.max(y1 - y0, 1e-9)) * zoom;
   const dep = { cx: vueCarte.cx, cy: vueCarte.cy, ech: vueCarte.echelle };
   const t0 = performance.now();
+  const jeton = ++jetonCam;
   (function anime(now) {
+    if (jeton !== jetonCam) return;
     const w = Math.min((now - t0) / duree, 1);
-    const e = 1 - Math.pow(1 - w, 3);
+    const e = w < 0.5 ? 4 * w * w * w : 1 - Math.pow(-2 * w + 2, 3) / 2; // easeInOutCubic
     vueCarte.cx = dep.cx + (mx - dep.cx) * e;
     vueCarte.cy = dep.cy + (my - dep.cy) * e;
-    vueCarte.echelle = dep.ech + (echCible - dep.ech) * e;
+    // zoom interpolé en log : vitesse perçue constante
+    vueCarte.echelle = dep.ech * Math.pow(echCible / dep.ech, e);
     if (w < 1) requestAnimationFrame(anime);
   })(t0);
 }
@@ -123,16 +134,24 @@ const modesActifs = new Set(["metro", "tram", "bus"]); // filtres légende
 
 // ============================ CANVAS ============================
 const canvas = document.getElementById("carte");
+const canvasFond = document.getElementById("fond");
 const ctxBrut = canvas.getContext ? canvas.getContext("2d") : null;
 const ctx = ctxBrut || new Proxy({}, { get: () => () => {} });
+const fondBrut = canvasFond.getContext ? canvasFond.getContext("2d") : null;
+const ctxF = fondBrut || new Proxy({}, { get: () => () => {} });
+let DPR = 1;
 function redimensionner() {
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = innerWidth * dpr;
-  canvas.height = innerHeight * dpr;
-  canvas.style.width = innerWidth + "px";
-  canvas.style.height = innerHeight + "px";
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  DPR = window.devicePixelRatio || 1;
+  for (const [cv, cx] of [[canvas, ctx]]) {
+    cv.width = innerWidth * DPR;
+    cv.height = innerHeight * DPR;
+    cv.style.width = innerWidth + "px";
+    cv.style.height = innerHeight + "px";
+    cx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  cleFond = "";
 }
+let cleFond = "";
 addEventListener("resize", redimensionner);
 redimensionner();
 
@@ -161,8 +180,356 @@ const badges = [];
 }
 badges.sort((a, b) => a.line.localeCompare(b.line, "fr", { numeric: true }));
 
-// ============================ RENDU ============================
+// ============================ RENDU (v2 « legendary ») ============================
+// Architecture :
+//  • couche statique (#fond) : lignes + stations + badges, rendue dans un cache hors écran
+//    avec marge, simplement recopiée (drawImage transformé) pendant pan/zoom/suivi,
+//    re-rendue nette quand la vue se stabilise ou sort du cache.
+//  • couche dynamique (#carte) : index temporel par mode (tri t0 + recherche binaire +
+//    fenêtre maxSpan) → on ne visite que les courses candidates ; traînées et têtes
+//    regroupées par couleur (1 stroke/fill par couleur au lieu de 3 par véhicule) ;
+//    halos en sprites pré-rendus + composition additive « lighter » (effet ville de nuit).
 const TRAIL_S = 45;
+const Q = new URLSearchParams(location.search);
+const SANS_LIGNES = Q.has("nolines");
+
+// ---- index temporel par mode ----
+const INDEX = {};
+for (const mode of ["metro", "tram", "bus"]) {
+  const l = courses.filter(c => c.mode === mode); // courses déjà triées par t0
+  const t0s = new Float64Array(l.length);
+  let maxSpan = 0;
+  l.forEach((c, i) => { t0s[i] = c.t0; if (c.span > maxSpan) maxSpan = c.span; });
+  INDEX[mode] = { l, t0s, maxSpan };
+}
+function borneSup(arr, v) { // premier index tel que arr[i] > v
+  let lo = 0, hi = arr.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] <= v) lo = m + 1; else hi = m; }
+  return lo;
+}
+function pourChaqueActive(mode, t, fn) {
+  const ix = INDEX[mode];
+  const fin = borneSup(ix.t0s, t);
+  const debut = borneSup(ix.t0s, t - ix.maxSpan - 1);
+  let vus = 0;
+  for (let i = debut; i < fin; i++) {
+    const c = ix.l[i];
+    if (t > c.t0 + c.span) continue;
+    fn(c); vus++;
+  }
+  return fin - debut;
+}
+
+// ---- lignes : Mercator pré-calculé une fois ----
+const LIGNES_M = LIGNES.map(f => {
+  const co = f.geometry.coordinates, m = new Float32Array(co.length * 2);
+  co.forEach(([lon, lat], i) => { m[i * 2] = mercX(lon); m[i * 2 + 1] = mercY(lat); });
+  return { m, ref: f.properties.ref, mode: f.properties.mode, color: "#" + f.properties.color };
+});
+
+// ---- arrêts (stops.json, additif) ----
+const ARRETS = (PAYLOAD.stops && PAYLOAD.stops.stops) || [];
+const ARRETS_PAR_LIGNE = (PAYLOAD.stops && PAYLOAD.stops.by_line) || {};
+const ARRETS_M = ARRETS.map(s => [mercX(s[3]), mercY(s[2])]);
+function nomArret(i) { const s = ARRETS[i]; return s ? joliNom(s[0]) : "—"; }
+// stations de métro : fusion des quais par nom → une station = un point
+const STATIONS = [];
+{
+  const parNom = new Map();
+  for (const r of ROUTES) {
+    if (r.mode !== "metro") continue;
+    for (const i of (ARRETS_PAR_LIGNE[r.line] || [])) {
+      const nom = ARRETS[i][0];
+      if (!parNom.has(nom)) parNom.set(nom, { nom: joliNom(nom), x: 0, y: 0, k: 0, quais: [] });
+      const s = parNom.get(nom);
+      s.x += ARRETS_M[i][0]; s.y += ARRETS_M[i][1]; s.k++; s.quais.push(i);
+    }
+  }
+  for (const s of parNom.values()) { s.x /= s.k; s.y /= s.k; STATIONS.push(s); }
+}
+// passages métro en station (pré-calculés : t, station) → pulse déterministe, rejouable
+const R_STATION = 90 / 6378137 / Math.cos(50.84 * Math.PI / 180); // 90 m au sol, en unités Mercator
+const PASSAGES_T = [], PASSAGES_S = [];
+{
+  const quaiVersStation = new Map();
+  STATIONS.forEach((s, k) => s.quais.forEach(q => quaiVersStation.set(q, k)));
+  const tmp = [];
+  for (const c of INDEX.metro.l) {
+    const quais = ARRETS_PAR_LIGNE[ROUTES[c.ref].line] || [];
+    const cand = [...new Set(quais.map(q => quaiVersStation.get(q)))];
+    let derniere = -1;
+    for (let i = 0; i < c.n; i++) {
+      const x = c.merc[i * 2], y = c.merc[i * 2 + 1];
+      for (const k of cand) {
+        const s = STATIONS[k];
+        const dx = x - s.x, dy = y - s.y;
+        if (dx * dx + dy * dy < R_STATION * R_STATION) {
+          if (k !== derniere) { tmp.push([c.t0 + i * c.DT, k]); derniere = k; }
+          break;
+        }
+      }
+    }
+  }
+  tmp.sort((a, b) => a[0] - b[0]);
+  for (const [t, k] of tmp) { PASSAGES_T.push(t); PASSAGES_S.push(k); }
+}
+
+// ---- sprites de halo (bloom) : un par couleur, pré-rendus ----
+const SPRITES = new Map();
+function sprite(couleur) {
+  let s = SPRITES.get(couleur);
+  if (s) return s;
+  s = document.createElement("canvas");
+  s.width = s.height = 64;
+  const g = s.getContext && s.getContext("2d");
+  if (g) {
+    const r = parseInt(couleur.slice(1, 3), 16), v = parseInt(couleur.slice(3, 5), 16), b = parseInt(couleur.slice(5, 7), 16);
+    const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, `rgba(${r},${v},${b},0.95)`);
+    gr.addColorStop(0.18, `rgba(${r},${v},${b},0.55)`);
+    gr.addColorStop(0.45, `rgba(${r},${v},${b},0.16)`);
+    gr.addColorStop(1, `rgba(${r},${v},${b},0)`);
+    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+  }
+  SPRITES.set(couleur, s);
+  return s;
+}
+const COULEUR_REF = ROUTES.map(r => "#" + r.color);
+
+// ---- état de rendu partagé ----
+let suivi = null;          // course suivie
+let heatmap = false;
+const STATS_RENDU = { candidats: 0, fondRendus: 0, fondMs: 0, fondRecopies: 0 };
+
+// ============================ COUCHE STATIQUE ============================
+// Le canvas #fond EST le cache (écran + marges) : pan/zoom/suivi = simple transform CSS
+// (compositeur GPU, zéro rasterisation) ; re-rendu net seulement si nécessaire.
+const cacheFond = canvasFond;
+const ctxCache = ctxF;
+const MARGE_CACHE = 0.35; // fraction d'écran rendue au-delà de chaque bord
+let vueCache = null;       // {cx, cy, ech, W, H, cle}
+let derniereVue = "", dernierChangementVue = 0, dernierBlit = "";
+function cleEtatFond() {
+  return [innerWidth, innerHeight, [...modesActifs].join(","), suivi ? suivi.ref : -1, heatmap ? 1 : 0, SANS_LIGNES ? 1 : 0].join("|");
+}
+function rendreCache() {
+  const t0 = performance.now();
+  const W = innerWidth, H = innerHeight;
+  const CW = Math.ceil(W * (1 + 2 * MARGE_CACHE)), CH = Math.ceil(H * (1 + 2 * MARGE_CACHE));
+  if (cacheFond.width !== CW * DPR || cacheFond.height !== CH * DPR) {
+    cacheFond.width = CW * DPR; cacheFond.height = CH * DPR;
+    cacheFond.style.width = CW + "px"; cacheFond.style.height = CH + "px";
+  }
+  const g = ctxCache;
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.clearRect(0, 0, CW, CH);
+  const k = vueCarte.echelle;
+  const ox = CW / 2 - vueCarte.cx * k, oy = CH / 2 + vueCarte.cy * k;
+  const zoomRel = vueCarte.echelle / echellePleine();
+  const refSuivi = suivi ? suivi.ref : -1;
+  const attenue = heatmap ? 0.35 : 1;
+  g.lineJoin = "round"; g.lineCap = "round";
+  if (!SANS_LIGNES) {
+    // lueur large en additif puis trait fin : « néon » discret
+    for (const passe of [0, 1]) {
+      g.globalCompositeOperation = passe === 0 ? "lighter" : "source-over";
+      for (const f of LIGNES_M) {
+        if (!modesActifs.has(f.mode)) continue;
+        const st = STYLE_MODE[f.mode] || STYLE_MODE.bus;
+        const focus = refSuivi < 0 ? 1 : (f.ref === refSuivi ? 2.2 : 0.35);
+        g.beginPath();
+        const m = f.m;
+        g.moveTo(ox + m[0] * k, oy - m[1] * k);
+        for (let i = 2; i < m.length; i += 2) g.lineTo(ox + m[i] * k, oy - m[i + 1] * k);
+        g.strokeStyle = f.color;
+        if (passe === 0) { g.globalAlpha = Math.min(1, st.alphaLigne * 0.3 * focus) * attenue; g.lineWidth = st.epLigne * 3; }
+        else { g.globalAlpha = Math.min(1, st.alphaLigne * focus) * attenue; g.lineWidth = st.epLigne * (focus > 1 ? 1.5 : 1); }
+        g.stroke();
+      }
+    }
+  }
+  g.globalCompositeOperation = "source-over";
+  // stations de métro : petits anneaux (lisibilité du réseau lourd)
+  if (modesActifs.has("metro")) {
+    g.globalAlpha = 0.55 * attenue; g.strokeStyle = "#cfd6e2"; g.lineWidth = 1;
+    const r = zoomRel > 1.6 ? 3 : 1.8;
+    g.beginPath();
+    for (const s of STATIONS) { const px = ox + s.x * k, py = oy - s.y * k; g.moveTo(px + r, py); g.arc(px, py, r, 0, 6.2832); }
+    g.stroke();
+    if (zoomRel > 2.2) { // noms de stations en zoom
+      g.font = "500 9.5px 'Segoe UI', sans-serif"; g.fillStyle = "rgba(207,214,226,0.7)";
+      g.textAlign = "left"; g.textBaseline = "middle";
+      for (const s of STATIONS) g.fillText(s.nom, ox + s.x * k + 6, oy - s.y * k);
+    }
+  }
+  // badges de lignes + terminus
+  for (const b of badges) {
+    if (!modesActifs.has(b.mode)) continue;
+    const px = ox + b.mx * k, py = oy - b.my * k;
+    if (px < -40 || px > CW + 40 || py < -20 || py > CH + 20) continue;
+    const seuil = b.mode === "metro" ? 0 : b.mode === "tram" ? 0.6 : 1.15;
+    if (zoomRel < seuil) continue;
+    g.globalAlpha = (refSuivi < 0 || b.ref === refSuivi ? 0.95 : 0.35) * (heatmap ? 0.5 : 1);
+    g.fillStyle = "#" + b.color;
+    const w = Math.max(20, 8 + b.line.length * 8);
+    g.beginPath();
+    g.roundRect ? g.roundRect(px - w / 2, py - 8, w, 16, 3) : g.rect(px - w / 2, py - 8, w, 16);
+    g.fill();
+    g.strokeStyle = "rgba(255,255,255,0.75)"; g.lineWidth = 1; g.stroke();
+    g.fillStyle = "#" + b.texte;
+    g.font = "700 10px 'Segoe UI', sans-serif";
+    g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillText(b.line, px, py + 0.5);
+    if (zoomRel > 1.05) {
+      g.font = "600 10px 'Segoe UI', sans-serif";
+      g.fillStyle = "rgba(238,241,246,0.88)";
+      g.textAlign = "left";
+      g.fillText(b.terminus, px + w / 2 + 6, py + 0.5);
+    }
+  }
+  g.globalAlpha = 1;
+  vueCache = { cx: vueCarte.cx, cy: vueCarte.cy, ech: vueCarte.echelle, W, H, CW, CH, cle: cleEtatFond() };
+  STATS_RENDU.fondRendus++;
+  STATS_RENDU.fondMs = performance.now() - t0;
+}
+function dessinerFond(maintenant) {
+  const W = innerWidth, H = innerHeight;
+  const vue = vueCarte.cx + "," + vueCarte.cy + "," + vueCarte.echelle;
+  if (vue !== derniereVue) { derniereVue = vue; dernierChangementVue = maintenant; }
+  const cle = cleEtatFond();
+  let aRendre = !vueCache || vueCache.cle !== cle;
+  if (!aRendre) {
+    const s = vueCarte.echelle / vueCache.ech;
+    const dx = W / 2 + (vueCache.cx - vueCarte.cx) * vueCarte.echelle - s * vueCache.CW / 2;
+    const dy = H / 2 + (vueCarte.cy - vueCache.cy) * vueCarte.echelle - s * vueCache.CH / 2;
+    const couvre = dx <= 0 && dy <= 0 && dx + vueCache.CW * s >= W && dy + vueCache.CH * s >= H;
+    const change = vueCache.cx !== vueCarte.cx || vueCache.cy !== vueCarte.cy || vueCache.ech !== vueCarte.echelle;
+    const stable = maintenant - dernierChangementVue > 160;
+    // re-rendu net si : sortie du cache, zoom > ±25 % (flou), ou vue stabilisée
+    if (!couvre || s > 1.25 || s < 0.8 || (change && stable)) aRendre = true;
+  }
+  if (aRendre) rendreCache();
+  const s = vueCarte.echelle / vueCache.ech;
+  const dx = W / 2 + (vueCache.cx - vueCarte.cx) * vueCarte.echelle - s * vueCache.CW / 2;
+  const dy = H / 2 + (vueCarte.cy - vueCache.cy) * vueCarte.echelle - s * vueCache.CH / 2;
+  const blit = dx.toFixed(2) + "," + dy.toFixed(2) + "," + s.toFixed(5) + "," + STATS_RENDU.fondRendus;
+  if (blit === dernierBlit) return; // rien n'a bougé : couche statique intacte
+  dernierBlit = blit;
+  canvasFond.style.transform = `translate(${dx.toFixed(2)}px, ${dy.toFixed(2)}px) scale(${s.toFixed(5)})`;
+  STATS_RENDU.fondRecopies++;
+}
+
+// ============================ HEATMAP (densité de passage) ============================
+// Grille ~150 m × créneaux de 5 min ; valeur = nombre de PASSAGES (entrées d'une course dans la cellule).
+// Construite à la 1re activation (≈ 1 s), puis image recalculée seulement quand le créneau change.
+const HM = { pret: false, nx: 0, ny: 0, x0: 0, y0: 0, pas: 0, slots: 0, g: null, img: null, cleImg: "", top: [] };
+function construireHeatmap() {
+  const t0 = performance.now();
+  HM.pas = 150 / 6378137 / Math.cos(50.84 * Math.PI / 180); // 150 m au sol en unités Mercator
+  HM.x0 = bxmin - HM.pas * 4; HM.y0 = bymin - HM.pas * 4;
+  HM.nx = Math.ceil((bxmax - bxmin) / HM.pas) + 8; HM.ny = Math.ceil((bymax - bymin) / HM.pas) + 8;
+  HM.slots = Math.ceil(T_MAX / 300) + 1;
+  HM.g = new Float32Array(HM.nx * HM.ny * HM.slots);
+  const N = HM.nx * HM.ny;
+  HM.mode = new Uint8Array(courses.length);
+  for (const c of courses) {
+    const m = c.merc;
+    let prec = -1;
+    for (let i = 0; i < c.n; i++) {
+      const cx = ((m[i * 2] - HM.x0) / HM.pas) | 0, cy = ((m[i * 2 + 1] - HM.y0) / HM.pas) | 0;
+      if (cx < 0 || cy < 0 || cx >= HM.nx || cy >= HM.ny) continue;
+      const cel = cy * HM.nx + cx;
+      if (cel === prec) continue; // une course compte une fois par traversée de cellule
+      prec = cel;
+      const sl = ((c.t0 + i * c.DT) / 300) | 0;
+      if (sl < HM.slots) HM.g[sl * N + cel] += 1;
+    }
+  }
+  HM.img = document.createElement("canvas"); HM.img.width = HM.nx; HM.img.height = HM.ny;
+  HM.pret = true;
+  HM.ms = performance.now() - t0;
+}
+function palette(v) { // 0..1 → « inferno » simplifié (noir → violet → orange → jaune pâle)
+  const st = [[0, 0, 0, 0], [0.15, 70, 20, 110], [0.4, 190, 50, 80], [0.7, 250, 140, 30], [1, 255, 245, 190]];
+  for (let i = 1; i < st.length; i++) if (v <= st[i][0]) {
+    const a = st[i - 1], b = st[i], w = (v - a[0]) / (b[0] - a[0]);
+    return [a[1] + (b[1] - a[1]) * w, a[2] + (b[2] - a[2]) * w, a[3] + (b[3] - a[3]) * w];
+  }
+  return [255, 245, 190];
+}
+function majImageHeatmap(t) {
+  const sl = Math.round(t / 300), cle = sl + "|" + [...modesActifs].join(",");
+  if (cle === HM.cleImg) return;
+  HM.cleImg = cle;
+  const N = HM.nx * HM.ny, somme = new Float32Array(N);
+  for (let s = sl - 3; s <= sl + 2; s++) { // fenêtre 30 min centrée
+    if (s < 0 || s >= HM.slots) continue;
+    const o = s * N;
+    for (let i = 0; i < N; i++) somme[i] += HM.g[o + i];
+  }
+  // somme = passages sur 30 min → ×2 = passages/heure
+  let max = 0; for (let i = 0; i < N; i++) if (somme[i] > max) max = somme[i];
+  const g = HM.img.getContext && HM.img.getContext("2d");
+  if (g) {
+    const im = g.createImageData(HM.nx, HM.ny);
+    const ref = Math.max(max * 0.55, 1);
+    for (let cy = 0; cy < HM.ny; cy++) for (let cx = 0; cx < HM.nx; cx++) {
+      const v = Math.min(1, Math.sqrt(somme[cy * HM.nx + cx] / ref));
+      const o = ((HM.ny - 1 - cy) * HM.nx + cx) * 4; // y Mercator vers le haut
+      const [r, gg, b] = palette(v);
+      im.data[o] = r; im.data[o + 1] = gg; im.data[o + 2] = b; im.data[o + 3] = v < 0.02 ? 0 : 255 * Math.min(1, v * 1.6);
+    }
+    g.putImageData(im, 0, 0);
+  }
+  // 3 cellules les plus chargées, nommées par l'arrêt le plus proche (distinctes d'au moins 1 km)
+  const idx = Array.from(somme.keys()).sort((a, b) => somme[b] - somme[a]);
+  HM.top = [];
+  for (const i of idx) {
+    if (HM.top.length >= 3 || somme[i] <= 0) break;
+    const x = HM.x0 + ((i % HM.nx) + 0.5) * HM.pas, y = HM.y0 + (((i / HM.nx) | 0) + 0.5) * HM.pas;
+    if (HM.top.some(p => Math.hypot(p.x - x, p.y - y) < HM.pas * 7)) continue;
+    let best = -1, bd = Infinity;
+    for (let a = 0; a < ARRETS_M.length; a++) {
+      const d = (ARRETS_M[a][0] - x) ** 2 + (ARRETS_M[a][1] - y) ** 2;
+      if (d < bd) { bd = d; best = a; }
+    }
+    HM.top.push({ x, y, nom: nomArret(best), vph: Math.round(somme[i] * 2) });
+  }
+}
+function dessinerHeatmap(t, ox, oy, k) {
+  if (!HM.pret) construireHeatmap();
+  majImageHeatmap(t);
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.globalAlpha = 0.85;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  const x = ox + HM.x0 * k, y = oy - (HM.y0 + HM.ny * HM.pas) * k;
+  ctx.drawImage(HM.img, x, y, HM.nx * HM.pas * k, HM.ny * HM.pas * k);
+  ctx.restore();
+  ctx.font = "600 10.5px 'Segoe UI', sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  // étiquettes décalées vers l'extérieur (hors du cœur saturé), sur fond opaque
+  const cxE = ox + ((bxmin + bxmax) / 2) * k, cyE = oy - ((bymin + bymax) / 2) * k;
+  HM.top.forEach((p, i) => {
+    const px = ox + p.x * k, py = oy - p.y * k;
+    const droite = px >= cxE;
+    const lx = droite ? Math.max(px + 60, cxE + 230) : Math.min(px - 60, cxE - 230);
+    const ly = py + (i - 1) * 6 + (py < cyE ? -30 : 30);
+    const txt = `${i + 1}. ${p.nom} — ${p.vph} passages/h`;
+    const mt = ctx.measureText(txt);
+    const w = ((mt && mt.width) || txt.length * 6) + 14;
+    ctx.globalAlpha = 0.95; ctx.strokeStyle = "#ffd9a0"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(px, py, 8, 0, 6.2832); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px + (droite ? 8 : -8), py); ctx.lineTo(lx, ly); ctx.stroke();
+    const bx = droite ? lx : lx - w;
+    ctx.fillStyle = "rgba(9,13,21,0.92)"; ctx.fillRect(bx, ly - 10, w, 20);
+    ctx.strokeRect(bx + 0.5, ly - 9.5, w - 1, 19);
+    ctx.fillStyle = "#ffe6c2"; ctx.fillText(txt, bx + 7, ly + 0.5);
+  });
+  ctx.globalAlpha = 1;
+}
+
+// ============================ COUCHE DYNAMIQUE ============================
 function positionCourse(c, t, out) {
   let x = (t - c.t0) / c.DT;
   if (x < 0) x = 0;
@@ -176,92 +543,122 @@ function positionCourse(c, t, out) {
   out.lon = v.getFloat32(b0 + 4, true) + fr * (v.getFloat32(b1 + 4, true) - v.getFloat32(b0 + 4, true));
   return out;
 }
+function tete(c, t, out) { // position Mercator interpolée (sans trigonométrie)
+  let x = (t - c.t0) / c.DT;
+  const iMax = c.n - 1;
+  if (x < 0) x = 0; if (x > iMax) x = iMax;
+  const i0 = Math.min(Math.floor(x), iMax - 1), fr = x - i0, m = c.merc;
+  out.x = m[i0 * 2] + fr * (m[i0 * 2 + 2] - m[i0 * 2]);
+  out.y = m[i0 * 2 + 1] + fr * (m[i0 * 2 + 3] - m[i0 * 2 + 1]);
+  return out;
+}
+const TRAIL_MODE = { bus: 65, tram: 50, metro: 42 };
+const tampon = { x: 0, y: 0 };
+let TETES = []; // [hx, hy, course] de la dernière frame — pour le clic « suivre »
 function dessiner(t) {
   const Wc = innerWidth, Hc = innerHeight;
+  dessinerFond(performance.now());
   ctx.clearRect(0, 0, Wc, Hc);
-  ctx.lineJoin = "round";
-  if (!new URLSearchParams(location.search).has("nolines")) {
-    for (const f of LIGNES) {
-      const st = STYLE_MODE[f.properties.mode] || STYLE_MODE.bus;
-      ctx.beginPath();
-      let premier = true;
-      for (const [lon, lat] of f.geometry.coordinates) {
-        const [px, py] = versEcran(mercX(lon), mercY(lat));
-        if (premier) { ctx.moveTo(px, py); premier = false; } else ctx.lineTo(px, py);
-      }
-      ctx.strokeStyle = "#" + f.properties.color;
-      ctx.globalAlpha = st.alphaLigne;
-      ctx.lineWidth = st.epLigne;
-      ctx.stroke();
-      ctx.globalAlpha = st.alphaLigne * 0.28;
-      ctx.lineWidth = st.epLigne * 2.4;
-      ctx.stroke();
-    }
-  }
-  // véhicules — dessin par couches de mode (métro au-dessus de tout)
-  const ordre = ["bus", "tram", "metro"];
-  const pos = { lat: 0, lon: 0 };
-  let visibles = 0;
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  let visibles = 0, candidats = 0;
   const parLigne = new Array(ROUTES.length).fill(0);
-  for (const mode of ordre) {
+  const k = vueCarte.echelle;
+  const ox = Wc / 2 - vueCarte.cx * k, oy = Hc / 2 + vueCarte.cy * k;
+  const hors = 60; // marge écran pour l'élagage
+  if (heatmap) dessinerHeatmap(t, ox, oy, k);
+  const attenue = heatmap ? 0.45 : 1;
+  const refSuivi = suivi ? suivi.ref : -1;
+  TETES = [];
+  for (const mode of ["bus", "tram", "metro"]) {
     if (!modesActifs.has(mode)) continue;
-    const st = STYLE_MODE[mode];
-    for (const c of courses) {
-      if (c.mode !== mode) continue;
-      if (c.t0 > t) continue;
-      if (t > c.t0 + c.span) continue;
+    const st = STYLE_MODE[mode], trailS = TRAIL_MODE[mode];
+    // regroupement par couleur : 1 path traînées + 1 liste de têtes par couleur
+    const groupes = new Map();
+    candidats += pourChaqueActive(mode, t, c => {
       visibles++;
       parLigne[c.ref]++;
-      positionCourse(c, t, pos);
-      const iActuel = Math.min(Math.floor((t - c.t0) / c.DT), c.n - 1);
-      const iTrail = Math.max(0, Math.floor((t - TRAIL_S - c.t0) / c.DT));
-      const v = vues[c.mode];
+      tete(c, t, tampon);
+      const hx = ox + tampon.x * k, hy = oy - tampon.y * k;
+      if (hx < -hors || hx > Wc + hors || hy < -hors || hy > Hc + hors) return; // hors écran : compté, pas dessiné
+      const col = COULEUR_REF[c.ref];
+      let gr = groupes.get(col);
+      if (!gr) { gr = { traines: [], tetes: [] }; groupes.set(col, gr); }
+      gr.traines.push(c); gr.tetes.push(hx, hy, c);
+      TETES.push(hx, hy, c);
+    });
+    // 1) traînées — additif : les corridors chargés s'illuminent d'eux-mêmes
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineWidth = st.epTrail;
+    for (const [col, gr] of groupes) {
       ctx.beginPath();
-      for (let i = iTrail; i <= iActuel; i++) {
-        const b = c.base + i * 10;
-        const [px, py] = versEcran(mercX(v.getFloat32(b + 4, true)), mercY(v.getFloat32(b, true)));
-        if (i === iTrail) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      for (const c of gr.traines) {
+        const iActuel = Math.min(Math.floor((t - c.t0) / c.DT), c.n - 1);
+        const iTrail = Math.max(0, Math.floor((t - trailS - c.t0) / c.DT));
+        const m = c.merc;
+        ctx.moveTo(ox + m[iTrail * 2] * k, oy - m[iTrail * 2 + 1] * k);
+        for (let i = iTrail + 1; i <= iActuel; i++) ctx.lineTo(ox + m[i * 2] * k, oy - m[i * 2 + 1] * k);
+        tete(c, t, tampon);
+        ctx.lineTo(ox + tampon.x * k, oy - tampon.y * k);
       }
-      const [hx, hy] = versEcran(mercX(pos.lon), mercY(pos.lat));
-      ctx.lineTo(hx, hy);
-      ctx.strokeStyle = "#" + ROUTES[c.ref].color;
-      ctx.globalAlpha = st.alphaTrail;
-      ctx.lineWidth = st.epTrail;
+      ctx.strokeStyle = col;
+      ctx.globalAlpha = st.alphaTrail * 0.75 * attenue;
       ctx.stroke();
-      ctx.beginPath(); ctx.arc(hx, hy, st.rTete + 2.4, 0, 6.2832);
-      ctx.fillStyle = "#" + ROUTES[c.ref].color; ctx.globalAlpha = st.alphaHalo; ctx.fill();
-      ctx.beginPath(); ctx.arc(hx, hy, st.rTete, 0, 6.2832); ctx.globalAlpha = 0.95; ctx.fill();
-      ctx.beginPath(); ctx.arc(hx, hy, st.rCoeur, 0, 6.2832); ctx.fillStyle = "#fff"; ctx.fill();
+    }
+    // 2) halos (bloom) — sprites additifs
+    const rHalo = (st.rTete + 2.4) * 2.6;
+    for (const [col, gr] of groupes) {
+      const sp = sprite(col);
+      const tt = gr.tetes;
+      for (let j = 0; j < tt.length; j += 3) {
+        const c = tt[j + 2];
+        const pulse = mode === "metro" ? 1 + Math.sin(t * 0.9 + c.t0 * 0.013) * 0.18 : 1;
+        const r = rHalo * pulse * (c.ref === refSuivi ? 1.35 : 1);
+        ctx.globalAlpha = (refSuivi >= 0 && c.ref !== refSuivi ? 0.35 : 0.9) * attenue;
+        ctx.drawImage(sp, tt[j] - r, tt[j + 1] - r, r * 2, r * 2);
+      }
+    }
+    // 3) têtes pleines + cœurs blancs (normal)
+    ctx.globalCompositeOperation = "source-over";
+    for (const [col, gr] of groupes) {
+      const tt = gr.tetes;
+      ctx.beginPath();
+      for (let j = 0; j < tt.length; j += 3) { ctx.moveTo(tt[j] + st.rTete, tt[j + 1]); ctx.arc(tt[j], tt[j + 1], st.rTete, 0, 6.2832); }
+      ctx.fillStyle = col; ctx.globalAlpha = 0.95 * attenue; ctx.fill();
+    }
+    ctx.beginPath();
+    for (const [, gr] of groupes) {
+      const tt = gr.tetes;
+      for (let j = 0; j < tt.length; j += 3) { ctx.moveTo(tt[j] + st.rCoeur, tt[j + 1]); ctx.arc(tt[j], tt[j + 1], st.rCoeur, 0, 6.2832); }
+    }
+    ctx.fillStyle = "#fff"; ctx.globalAlpha = attenue; ctx.fill();
+  }
+  // 4) pulses des stations de métro desservies (déterministes, rejouables à tout instant t)
+  if (modesActifs.has("metro") && PASSAGES_T.length) {
+    const P = Math.max(25, vitesse * 0.9); // ≈ 0,9 s réelle quelle que soit l'accélération
+    const fin = borneSup(PASSAGES_T, t), deb = borneSup(PASSAGES_T, t - P);
+    ctx.lineWidth = 1.4; ctx.strokeStyle = "#ffe7b0";
+    for (let i = deb; i < fin; i++) {
+      const s = STATIONS[PASSAGES_S[i]], ph = (t - PASSAGES_T[i]) / P;
+      const px = ox + s.x * k, py = oy - s.y * k;
+      if (px < -hors || px > Wc + hors || py < -hors || py > Hc + hors) continue;
+      ctx.globalAlpha = (1 - ph) * 0.8 * attenue;
+      ctx.beginPath(); ctx.arc(px, py, 3 + ph * 13, 0, 6.2832); ctx.stroke();
     }
   }
-  // badges de lignes + terminus — visibilité selon modes actifs et zoom
-  const echPleine = echellePleine();
-  for (const b of badges) {
-    if (!modesActifs.has(b.mode)) continue;
-    const [px, py] = versEcran(b.mx, b.my);
-    if (px < -40 || px > Wc + 40 || py < -20 || py > Hc + 20) continue;
-    // hiérarchie : métro toujours, tram dès 60 %, bus seulement en zoom
-    const seuil = b.mode === "metro" ? 0 : b.mode === "tram" ? 0.6 : 1.15;
-    if (vueCarte.echelle / echPleine < seuil) continue;
-    ctx.globalAlpha = 0.95;
-    ctx.fillStyle = "#" + b.color;
-    const w = Math.max(20, 8 + b.line.length * 8);
-    ctx.beginPath();
-    ctx.roundRect ? ctx.roundRect(px - w / 2, py - 8, w, 16, 3) : ctx.rect(px - w / 2, py - 8, w, 16);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.75)"; ctx.lineWidth = 1; ctx.stroke();
-    ctx.fillStyle = "#" + b.texte;
-    ctx.font = "700 10px 'Segoe UI', sans-serif";
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(b.line, px, py + 0.5);
-    if (vueCarte.echelle > echPleine * 1.05) {
-      ctx.font = "600 10px 'Segoe UI', sans-serif";
-      ctx.fillStyle = "rgba(238,241,246,0.88)";
-      ctx.textAlign = "left";
-      ctx.fillText(b.terminus, px + w / 2 + 6, py + 0.5);
+  // 5) véhicule suivi : réticule
+  if (suivi && t >= suivi.t0 && t <= suivi.t0 + suivi.span) {
+    tete(suivi, t, tampon);
+    const px = ox + tampon.x * k, py = oy - tampon.y * k;
+    ctx.globalAlpha = 0.9; ctx.strokeStyle = "#d4b36a"; ctx.lineWidth = 1.5;
+    const r = 13 + Math.sin(performance.now() / 260) * 1.5;
+    ctx.beginPath(); ctx.arc(px, py, r, 0, 6.2832); ctx.stroke();
+    for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      ctx.beginPath(); ctx.moveTo(px + a * (r + 3), py + b * (r + 3)); ctx.lineTo(px + a * (r + 9), py + b * (r + 9)); ctx.stroke();
     }
   }
   ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  STATS_RENDU.candidats = candidats;
   return { visibles, parLigne };
 }
 
@@ -365,9 +762,212 @@ elDate.textContent = `Simulation · mercredi ${d.slice(6, 8)}/${d.slice(4, 6)}/$
 
 let zoomActif = null;
 function zoomLigne(ref) {
+  quitterSuivi(false);
   if (zoomActif === ref) { zoomActif = null; camVers([bxmin, bymin, bxmax, bymax], 1); return; }
   zoomActif = ref;
   camVers(bboxDeRefs([ref]), 1.02);
+}
+
+// ============================ SUIVI D'UN VÉHICULE ============================
+const elSuivi = document.getElementById("suivi");
+const COS_LAT = Math.cos(50.84 * Math.PI / 180);
+let echSuivi = 0;
+function arretsOrdonnes(c) { // arrêts de la ligne projetés sur la trajectoire de CETTE course, dans l'ordre
+  const quais = ARRETS_PAR_LIGNE[ROUTES[c.ref].line] || [];
+  const seuil = (70 / 6378137 / COS_LAT) ** 2, m = c.merc, res = [];
+  for (const q of quais) {
+    const [sx, sy] = ARRETS_M[q];
+    let best = -1, bd = seuil;
+    for (let i = 0; i < c.n; i++) {
+      const d = (m[i * 2] - sx) ** 2 + (m[i * 2 + 1] - sy) ** 2;
+      if (d < bd) { bd = d; best = i; }
+    }
+    if (best >= 0) res.push({ i: best, q, nom: nomArret(q) });
+  }
+  res.sort((a, b) => a.i - b.i);
+  return res.filter((s, j) => j === 0 || s.nom !== res[j - 1].nom); // quais opposés / doublons
+}
+function longueurKm(c) {
+  let L = 0; const m = c.merc;
+  for (let i = 1; i < c.n; i++) L += Math.hypot(m[i * 2] - m[i * 2 - 2], m[i * 2 + 1] - m[i * 2 - 1]);
+  return L * 6378.137 * COS_LAT;
+}
+function suivre(c) {
+  if (!c) { quitterSuivi(true); return; }
+  quitterKiosque();
+  zoomActif = null;
+  suivi = c;
+  c.arrets = c.arrets || arretsOrdonnes(c);
+  c.km = c.km || longueurKm(c);
+  echSuivi = Math.max(vueCarte.echelle, echellePleine() * 4.2);
+  jetonCam++; // coupe toute animation caméra en cours : la caméra appartient au suivi
+  const r = ROUTES[c.ref];
+  const b = document.getElementById("sv-badge");
+  b.textContent = r.line; b.style.background = "#" + r.color; b.style.color = "#" + r.text_color;
+  document.getElementById("sv-mode").textContent = { metro: "Métro", tram: "Tram", bus: "Bus" }[c.mode] + " · ligne " + r.line;
+  const dernier = c.arrets.length ? c.arrets[c.arrets.length - 1].nom : "—";
+  document.getElementById("sv-terminus").textContent = dernier;
+  document.getElementById("sv-vitesse").textContent = (c.km / (c.span / 3600)).toFixed(1).replace(".", ",") + " km/h";
+  document.getElementById("sv-fin").textContent = hhmm(c.t0 + c.span);
+  elSuivi.classList.add("on");
+  majSuivi(tSim);
+}
+function quitterSuivi(recadrer) {
+  if (!suivi) return;
+  suivi = null;
+  elSuivi.classList.remove("on");
+  if (recadrer) camVers([bxmin, bymin, bxmax, bymax], 1, 1600);
+}
+function infoSuivi(t) {
+  const c = suivi; if (!c) return null;
+  const iCour = (t - c.t0) / c.DT;
+  const proch = c.arrets.find(s => s.i > iCour + 0.01);
+  const restants = c.arrets.filter(s => s.i > iCour + 0.01).length;
+  return { ligne: ROUTES[c.ref].line, mode: c.mode, prochain: proch ? proch.nom : "Terminus",
+           eta: proch ? c.t0 + proch.i * c.DT : c.t0 + c.span, restants,
+           progres: Math.min(1, Math.max(0, (t - c.t0) / c.span)), nbArrets: c.arrets.length,
+           terminus: c.arrets.length ? c.arrets[c.arrets.length - 1].nom : "—", km: c.km };
+}
+function majSuivi(t) {
+  const inf = infoSuivi(t); if (!inf) return;
+  document.getElementById("sv-prochain").textContent = inf.prochain;
+  const dt = Math.max(0, Math.round(inf.eta - t));
+  document.getElementById("sv-eta").textContent = hhmm(inf.eta) + (dt < 3600 ? ` · ${Math.floor(dt / 60)} min ${String(dt % 60).padStart(2, "0")}` : "");
+  document.getElementById("sv-restants").textContent = inf.restants + " / " + inf.nbArrets;
+  document.getElementById("sv-progres").style.width = (inf.progres * 100).toFixed(1) + "%";
+}
+function cameraSuivi(dtReel) {
+  if (!suivi) return;
+  if (tSim > suivi.t0 + suivi.span + 20) { // arrivé : on relâche la caméra
+    quitterSuivi(true); return;
+  }
+  tete(suivi, Math.max(tSim, suivi.t0), tampon);
+  // ressort amorti indépendant du framerate
+  const a = 1 - Math.exp(-dtReel * 4.5), z = 1 - Math.exp(-dtReel * 2.2);
+  vueCarte.cx += (tampon.x - vueCarte.cx) * a;
+  vueCarte.cy += (tampon.y - vueCarte.cy) * a;
+  vueCarte.echelle *= Math.pow(echSuivi / vueCarte.echelle, z);
+}
+function vehiculeSous(x, y) { // plus proche tête à l'écran (rayon 14 px), métro prioritaire
+  let best = null, bd = 14 * 14, bm = -1;
+  const prio = { bus: 0, tram: 1, metro: 2 };
+  for (let j = 0; j < TETES.length; j += 3) {
+    const d = (TETES[j] - x) ** 2 + (TETES[j + 1] - y) ** 2;
+    const c = TETES[j + 2];
+    if (d < bd || (d < 14 * 14 && prio[c.mode] > bm && d < bd * 2.5)) { bd = d; best = c; bm = prio[c.mode]; }
+  }
+  return best;
+}
+function suivreAuto(t, mode = "metro") { // choisit un véhicule du mode, au cœur du réseau, avec >= 8 min de trajet devant lui
+  const cx = (bxmin + bxmax) / 2, cy = (bymin + bymax) / 2;
+  let best = null, bd = Infinity;
+  pourChaqueActive(mode, t, c => {
+    if (c.t0 + c.span - t < 480) return;
+    tete(c, t, tampon);
+    const d = (tampon.x - cx) ** 2 + (tampon.y - cy) ** 2;
+    if (d < bd) { bd = d; best = c; }
+  });
+  if (best) suivre(best);
+  return best ? infoSuivi(t) : null;
+}
+
+// ============================ PROFIL HORAIRE (sparkline) ============================
+const PROFIL = new Uint16Array(Math.ceil(T_MAX / 60) + 1); // véhicules actifs, minute par minute
+for (const c of courses) { // même règle que pipeline/build_p1.py (minute_counts) → pic = network.json
+  for (let m = Math.floor(c.t0 / 60); m <= Math.floor((c.t0 + c.span) / 60) && m < PROFIL.length; m++) PROFIL[m]++;
+}
+const PICS = (() => { // pics annotés : pointe du matin, creux de midi, pointe du soir (calculés, pas codés en dur)
+  const arg = (a, b, sgn) => { let bi = a; for (let m = a; m <= b; m++) if (sgn * PROFIL[m] > sgn * PROFIL[bi]) bi = m; return bi; };
+  const matin = arg(5 * 60, 10 * 60, 1), soir = arg(14 * 60, 20 * 60, 1), creux = arg(10 * 60, 14 * 60, -1);
+  return [{ m: matin, lib: "pointe matin" }, { m: creux, lib: "creux" }, { m: soir, lib: "pointe soir" }]
+    .map(p => ({ ...p, t: p.m * 60, n: PROFIL[p.m] }));
+})();
+const cvProfil = document.getElementById("profil");
+const gProfil = (cvProfil.getContext && cvProfil.getContext("2d")) || new Proxy({}, { get: () => () => {} });
+const elLecture = document.getElementById("profil-lecture");
+const INSET_POUCE = 7.5; // le curseur du range n'atteint pas les bords
+function xProfil(t, w) { return INSET_POUCE + (Math.min(t, T_MAX) / T_MAX) * (w - 2 * INSET_POUCE); }
+function tProfil(x, w) { return Math.max(0, Math.min(T_MAX, (x - INSET_POUCE) / (w - 2 * INSET_POUCE) * T_MAX)); }
+let survolProfil = null;
+function dessinerProfil(t) {
+  const w = cvProfil.clientWidth, h = cvProfil.clientHeight;
+  if (!w) return;
+  if (cvProfil.width !== w * DPR) { cvProfil.width = w * DPR; cvProfil.height = h * DPR; }
+  const g = gProfil;
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.clearRect(0, 0, w, h);
+  let max = 0; for (const v of PROFIL) if (v > max) max = v;
+  const y = v => h - 2 - (v / max) * (h - 12);
+  const xc = xProfil(t, w);
+  // aire : passé en or, futur en gris
+  for (const [x0, x1, coul] of [[0, xc, "rgba(212,179,106,"], [xc, w, "rgba(150,160,173,"]]) {
+    g.save(); g.beginPath(); g.rect(x0, 0, x1 - x0, h); g.clip();
+    const gr = g.createLinearGradient(0, 0, 0, h);
+    gr.addColorStop(0, coul + "0.38)"); gr.addColorStop(1, coul + "0.02)");
+    g.beginPath(); g.moveTo(xProfil(0, w), h);
+    for (let m = 0; m < PROFIL.length; m += 2) g.lineTo(xProfil(m * 60, w), y(PROFIL[m]));
+    g.lineTo(xProfil(T_MAX, w), h); g.closePath(); g.fillStyle = gr; g.fill();
+    g.beginPath();
+    for (let m = 0; m < PROFIL.length; m += 2) g[m ? "lineTo" : "moveTo"](xProfil(m * 60, w), y(PROFIL[m]));
+    g.strokeStyle = coul + "0.85)"; g.lineWidth = 1; g.stroke();
+    g.restore();
+  }
+  // annotations des pics
+  g.font = "600 9px 'Segoe UI', sans-serif"; g.textBaseline = "bottom";
+  for (const p of PICS) {
+    const px = xProfil(p.t, w), py = y(p.n);
+    g.fillStyle = "#d4b36a"; g.beginPath(); g.arc(px, py, 2, 0, 6.2832); g.fill();
+    g.fillStyle = "rgba(238,241,246,0.8)"; g.textAlign = px > w - 80 ? "right" : "center";
+    g.fillText(`${hhmm(p.t)} · ${p.n} ${p.lib}`, px, Math.max(9, py - 3));
+  }
+  // curseur temps
+  g.fillStyle = "#d4b36a"; g.fillRect(xc - 0.5, 0, 1, h);
+  if (survolProfil !== null) { g.fillStyle = "rgba(255,255,255,0.35)"; g.fillRect(survolProfil - 0.5, 0, 1, h); }
+}
+cvProfil.addEventListener("pointermove", e => {
+  const r = cvProfil.getBoundingClientRect(), x = e.clientX - r.left;
+  survolProfil = x;
+  const t = tProfil(x, r.width), n = PROFIL[Math.round(t / 60)] || 0;
+  elLecture.style.display = "block"; elLecture.style.left = x + "px";
+  elLecture.textContent = `${hhmm(t)} · ${n} véhicules`;
+});
+cvProfil.addEventListener("pointerleave", () => { survolProfil = null; elLecture.style.display = "none"; });
+cvProfil.addEventListener("click", e => {
+  const r = cvProfil.getBoundingClientRect();
+  quitterKiosque();
+  tSim = tProfil(e.clientX - r.left, r.width);
+  dernierT = performance.now();
+});
+
+// ============================ AMBIANCE JOUR / NUIT ============================
+// Le fond reste sombre (lisibilité) ; seule la « température » du ciel suit l'heure.
+const CLES_CIEL = [ // heure, couleur fond, teinte du halo, opacité du halo
+  [0, [5, 8, 14], [40, 50, 110], 0.10], [4.5, [5, 8, 14], [40, 50, 110], 0.10],
+  [6.3, [11, 13, 24], [230, 120, 70], 0.22],   // aube
+  [8.5, [12, 19, 32], [110, 160, 230], 0.16],  // matin
+  [13, [14, 22, 36], [140, 180, 235], 0.16],   // plein jour
+  [18.3, [12, 15, 27], [240, 110, 60], 0.24],  // crépuscule
+  [20.5, [7, 10, 18], [90, 60, 150], 0.14],
+  [23, [5, 8, 14], [40, 50, 110], 0.10], [26, [5, 8, 14], [40, 50, 110], 0.10],
+];
+function ambiance(t) {
+  const h = t / 3600;
+  let i = 1; while (i < CLES_CIEL.length - 1 && CLES_CIEL[i][0] < h) i++;
+  const a = CLES_CIEL[i - 1], b = CLES_CIEL[i];
+  const w = Math.max(0, Math.min(1, (h - a[0]) / (b[0] - a[0])));
+  const L = (p, q) => p.map((v, j) => Math.round(v + (q[j] - v) * w));
+  return { fond: L(a[1], b[1]), halo: L(a[2], b[2]), op: a[3] + (b[3] - a[3]) * w };
+}
+const elCiel = document.getElementById("ciel");
+let derniereAmbiance = "";
+function majAmbiance(t) {
+  const am = ambiance(t);
+  const cle = am.fond.join() + am.halo.join() + am.op.toFixed(2);
+  if (cle === derniereAmbiance) return;
+  derniereAmbiance = cle;
+  document.body.style.backgroundColor = `rgb(${am.fond})`;
+  elCiel.style.background = `radial-gradient(ellipse 90% 60% at 50% 105%, rgba(${am.halo},${am.op}) 0%, transparent 70%)`;
+  elCiel.style.opacity = 1;
 }
 
 let dernierHud = 0;
@@ -386,6 +986,9 @@ function majHud(t, compteurs, maintenant) {
     }
   }
   if (document.activeElement !== elTimeline) elTimeline.value = Math.min(t, T_MAX);
+  majSuivi(t);
+  majAmbiance(t);
+  dessinerProfil(t);
 }
 
 // ============================ SCÉNARIO PRÉSENTATION ============================
@@ -396,13 +999,18 @@ const SCENARIO = [
   { until: 9.6  * 3600, speed: 600,  cam: null,            zoom: 1 },     // pleine amplitude
   { until: 12.6 * 3600, speed: 900,  cam: BBOX_TRAM,       zoom: 1.02 },  // maillage tram
   { until: 17   * 3600, speed: 600,  cam: null,            zoom: 1 },     // pic tram 16:11
-  { until: 19.6 * 3600, speed: 260,  cam: BBOX_BOUCLE,     zoom: 1.25 },  // pointe du soir
+  { until: 19.6 * 3600, speed: 180,  cam: BBOX_BOUCLE,     zoom: 1.25, suivre: "metro" },  // pointe du soir : caméra embarquée
   { until: 25   * 3600, speed: 1200, cam: null,            zoom: 1 },     // soirée accélérée
 ];
 function appliquerEtape(i) {
   const e = SCENARIO[i];
   vitesse = e.speed;
   document.querySelectorAll(".vit").forEach(x => x.classList.toggle("actif", +x.dataset.v === e.speed));
+  quitterSuivi(false);
+  if (e.suivre) { // suivi embarqué sans quitter le kiosque
+    const k = kiosque; kiosque = false; suivreAuto(tSim, e.suivre); kiosque = k;
+    if (suivi) return;
+  }
   if (e.cam) camVers(e.cam, e.zoom); else camVers([bxmin, bymin, bxmax, bymax], 1);
 }
 function demarrerKiosque() {
@@ -418,6 +1026,7 @@ function demarrerKiosque() {
 function quitterKiosque() {
   if (!kiosque) return;
   kiosque = false;
+  quitterSuivi(false);
   etapeScenario = -1;
   elBadgeKiosque.style.display = "none";
   document.body.style.cursor = "";
@@ -426,6 +1035,9 @@ function quitterKiosque() {
 }
 function piloterScenario() {
   if (!kiosque) return;
+  if (etapeScenario >= 0 && SCENARIO[etapeScenario].suivre && !suivi) { // le véhicule est arrivé : on en prend un autre
+    const k = kiosque; kiosque = false; suivreAuto(tSim, SCENARIO[etapeScenario].suivre); kiosque = k;
+  }
   if (tSim >= T_MAX - 60) { tSim = T_LOOP_DEBUT; etapeScenario = 0; appliquerEtape(0); return; }
   const cible = SCENARIO.findIndex(e => tSim < e.until);
   const i = cible === -1 ? SCENARIO.length - 1 : cible;
@@ -433,7 +1045,9 @@ function piloterScenario() {
 }
 
 // ============================ BOUCLE ============================
+const JS_FRAME = new Float32Array(240); let iJs = 0; // télémétrie : ms de JS par frame
 function boucle(maintenant) {
+  const debutJs = performance.now();
   const delta = (maintenant - dernierT) / 1000;
   dernierT = maintenant;
   if (enLecture) {
@@ -441,11 +1055,13 @@ function boucle(maintenant) {
     if (!kiosque && tSim > T_MAX) { tSim = T_MAX; basculerLecture(); }
     if (kiosque) piloterScenario();
   }
+  cameraSuivi(Math.min(delta, 0.1));
   const compteurs = dessiner(tSim);
   majHud(tSim, compteurs, maintenant);
   const fps = 1 / Math.max(delta, 1e-4);
   fpsMoyen = fpsMoyen * 0.92 + fps * 0.08;
-  elFps.textContent = Math.round(fpsMoyen) + " fps";
+  JS_FRAME[iJs++ % JS_FRAME.length] = performance.now() - debutJs;
+  if (maintenant - dernierHud < 1) elFps.textContent = Math.round(fpsMoyen) + " fps";
   requestAnimationFrame(boucle);
 }
 
@@ -466,21 +1082,48 @@ document.querySelectorAll(".vit").forEach(b => {
 document.getElementById("btn-kiosque").addEventListener("click", demarrerKiosque);
 canvas.addEventListener("wheel", e => {
   e.preventDefault(); quitterKiosque();
-  vueCarte.echelle *= e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  jetonCam++;
+  if (suivi) { echSuivi *= f; return; } // en suivi : le zoom reste centré sur le véhicule
+  // zoom vers le pointeur (le point sous la souris reste fixe)
+  const mx = vueCarte.cx + (e.clientX - innerWidth / 2) / vueCarte.echelle;
+  const my = vueCarte.cy - (e.clientY - innerHeight / 2) / vueCarte.echelle;
+  vueCarte.echelle *= f;
+  vueCarte.cx = mx - (e.clientX - innerWidth / 2) / vueCarte.echelle;
+  vueCarte.cy = my + (e.clientY - innerHeight / 2) / vueCarte.echelle;
 }, { passive: false });
 let drag = null;
-canvas.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY }; canvas.classList.add("drag"); });
+canvas.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, bouge: false }; canvas.classList.add("drag"); });
 addEventListener("pointermove", e => {
-  if (!drag) return;
-  quitterKiosque();
+  if (!drag) {
+    if (e.target === canvas) canvas.classList.toggle("survol", !!vehiculeSous(e.clientX, e.clientY));
+    return;
+  }
+  if (!drag.bouge && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 5) return; // tolérance clic
+  if (!drag.bouge) { drag.bouge = true; quitterKiosque(); quitterSuivi(false); jetonCam++; }
   vueCarte.cx -= (e.clientX - drag.x) / vueCarte.echelle;
   vueCarte.cy += (e.clientY - drag.y) / vueCarte.echelle;
-  drag = { x: e.clientX, y: e.clientY };
+  drag.x = e.clientX; drag.y = e.clientY;
 });
-addEventListener("pointerup", () => { drag = null; canvas.classList.remove("drag"); });
+addEventListener("pointerup", e => {
+  if (drag && !drag.bouge && e.target === canvas) {
+    const c = vehiculeSous(e.clientX, e.clientY);
+    if (c) suivre(c);
+  }
+  drag = null; canvas.classList.remove("drag");
+});
+document.getElementById("suivi-fermer").addEventListener("click", () => quitterSuivi(true));
+function basculerHeatmap(v) {
+  heatmap = v === undefined ? !heatmap : !!v;
+  document.getElementById("mode-heat").style.display = heatmap ? "block" : "none";
+  return heatmap;
+}
 addEventListener("keydown", e => {
+  if (e.target && e.target.tagName === "INPUT" && e.code !== "Space" && e.code !== "Escape") return;
   if (e.code === "Space") { e.preventDefault(); quitterKiosque(); basculerLecture(); }
-  if (e.code === "Escape") quitterKiosque();
+  if (e.code === "Escape") { quitterKiosque(); if (suivi) quitterSuivi(true); }
+  if (e.code === "KeyH") basculerHeatmap();
+  if (e.code === "KeyF") { quitterKiosque(); suivreAuto(tSim, "metro"); }
 });
 
 // ============================ SPLASH ============================
@@ -534,6 +1177,15 @@ window.__APP = {
     return res;
   },
   get kiosque() { return kiosque; },
+  // v2
+  INDEX, STATIONS, PASSAGES: PASSAGES_T.length, ARRETS: ARRETS.length, PROFIL, PICS,
+  suivre: c => suivre(c), suivreAuto: (t, m) => { tSim = t; return suivreAuto(t, m); },
+  infoSuivi: () => infoSuivi(tSim), get suivi() { return suivi; },
+  basculerHeatmap, heatmapTop: t => { if (!HM.pret) construireHeatmap(); majImageHeatmap(t); return { top: HM.top, ms: HM.ms, grille: [HM.nx, HM.ny, HM.slots] }; },
+  ambiance, vehiculeSous, candidats: t => ["metro", "tram", "bus"].reduce((s, m) => s + pourChaqueActive(m, t, () => {}), 0),
+  benchInfo: () => ({ ...STATS_RENDU }),
+  jsFrame: () => { const a = Array.from(JS_FRAME).filter(v => v > 0).sort((x, y) => x - y); return { med: a[a.length >> 1], p95: a[Math.floor(a.length * 0.95)] }; },
+  stationsDesservies: (t, fen) => { const d = borneSup(PASSAGES_T, t - fen), f = borneSup(PASSAGES_T, t); return f - d; },
 };
 redimensionner();
 ajusterVue();

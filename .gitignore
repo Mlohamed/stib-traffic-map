@@ -16,3 +16,6 @@ STIBMAP_MetroTram_v*_local.html
 # Docs internes (démo business)
 DEMO_SCRIPT.md
 PLAN_STIB_TRAFFIC_MAP.md
+# Profils Edge jetables du banc de mesure (app/cdp_bench.js)
+.bench/
+STIBMAP_UITP_v*_local.html
