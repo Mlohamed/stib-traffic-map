@@ -2,7 +2,8 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#070b12">
 <title>Brussels Network in Motion — STIB-MIVB Open Data Showcase</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%23070b12'/%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%23d4b36a' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23d4b36a'/%3E%3C/svg%3E">
 <style>
@@ -20,7 +21,7 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: var(--fond); }
   body { font-family: "Segoe UI", system-ui, sans-serif; color: var(--texte); }
-  #carte { position: absolute; inset: 0; cursor: grab; }
+  #carte { position: absolute; inset: 0; cursor: grab; touch-action: none; }
   #carte.drag { cursor: grabbing; }
   #vignette { position: absolute; inset: 0; pointer-events: none;
     background: radial-gradient(ellipse at 50% 45%, transparent 52%, rgba(3, 6, 11, 0.62) 100%); }
@@ -142,6 +143,66 @@
   #btn-kiosk-plein:hover { border-color: var(--or); }
   #splash .mentions { position: absolute; bottom: 22px; font-size: 8.5px; color: var(--texte-3);
     letter-spacing: 1px; line-height: 1.7; }
+
+  #btn-legende { display: none; width: 100%; margin-top: 8px; padding: 8px 0; background: transparent;
+    border: 1px solid rgba(212,179,106,0.45); border-radius: 3px; color: var(--or); font-size: 10px;
+    letter-spacing: 2px; text-transform: uppercase; font-weight: 600; cursor: pointer; }
+  body.legende-ouverte #btn-legende { background: rgba(212,179,106,0.1); }
+
+  /* ================= MOBILE (portrait < 760 px ou paysage < 520 px de haut) ================= */
+  @media (max-width: 760px), (max-height: 520px) {
+    #bandeau, #fps, #graduations { display: none; }
+    .panneau { padding: 8px 11px; }
+    #haut-gauche { top: calc(8px + env(safe-area-inset-top)); left: 8px; min-width: 0; }
+    #haut-gauche .au-dessus { display: none; }
+    #horloge { font-size: 28px; letter-spacing: 1px; margin: 0; }
+    #horloge .j1 { font-size: 10px; margin-left: 4px; }
+    #phase-journee { font-size: 9.5px; max-width: 150px; line-height: 1.35; }
+    #haut-droite { top: calc(8px + env(safe-area-inset-top)); right: 8px; width: auto; }
+    #haut-droite > .au-dessus { display: none; }
+    #kpis { margin: 0; gap: 2px 14px; }
+    .kpi .v { font-size: 17px; }
+    .kpi .l { font-size: 7.5px; letter-spacing: 1px; }
+    #btn-legende { display: block; }
+    #sep-legende, #onglets, #legende { display: none; }
+    body.legende-ouverte #haut-droite { left: 8px; }
+    body.legende-ouverte #sep-legende { display: block; }
+    body.legende-ouverte #onglets { display: flex; }
+    body.legende-ouverte #legende { display: grid; grid-template-columns: repeat(3, 1fr);
+      max-height: 44vh; gap: 4px 10px; }
+    .onglet { padding: 8px 0 6px; }
+    .ligne-item { font-size: 11px; padding: 4px 3px; }
+    .num-badge { min-width: 24px; height: 17px; }
+    #controles { left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); padding: 8px 10px; }
+    #rangees { flex-wrap: wrap; gap: 8px 10px; }
+    #btn-play { width: 40px; height: 40px; }
+    #timeline { flex: 1 1 calc(100% - 52px); min-width: 0; height: 6px; }
+    #timeline::-webkit-slider-thumb { width: 22px; height: 22px; }
+    #vitesse { order: 3; flex: 1 1 auto; }
+    .vit { flex: 1; padding: 8px 0; }
+    #btn-kiosque { order: 4; padding: 8px 12px; }
+    #attribution { left: 8px; right: 8px; bottom: calc(112px + env(safe-area-inset-bottom));
+      text-align: center; font-size: 7.5px; line-height: 1.5; }
+    #badge-kiosque { top: 84px; font-size: 8px; letter-spacing: 1px; white-space: nowrap; }
+
+    #splash { justify-content: flex-start; overflow-y: auto; padding: 40px 18px 22px; }
+    #splash > :first-child { margin-top: auto; }
+    #splash > :last-child { margin-bottom: auto; }
+    #splash .sur-titre { font-size: 8px; letter-spacing: 3px; margin-bottom: 14px; }
+    #splash h1 { font-size: 27px; letter-spacing: 5px; }
+    #splash .filet { margin: 18px 0; }
+    #splash .sous-titre { font-size: 12px; line-height: 1.65; padding: 0; }
+    #splash .chiffres { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 34px; margin: 24px 0 4px; }
+    #splash .chiffres .v { font-size: 22px; }
+    #splash .boutons { flex-direction: column; width: 100%; max-width: 320px; gap: 10px; margin-top: 26px; }
+    #splash button { padding: 14px 10px; letter-spacing: 2px; }
+    #splash .mentions { position: static; margin-top: 26px; font-size: 7.5px; }
+  }
+  @media (max-height: 520px) and (orientation: landscape) {
+    body.legende-ouverte #haut-droite { left: auto; width: 60vw; }
+    body.legende-ouverte #legende { grid-template-columns: repeat(5, 1fr); max-height: 38vh; }
+    #controles { left: 50%; transform: translateX(-50%); width: min(560px, calc(100vw - 16px)); right: auto; }
+  }
 </style>
 </head>
 <body>
@@ -194,13 +255,14 @@
     <div class="kpi"><div class="v" id="kpi-veh">0</div><div class="l">Véhicules en ligne</div></div>
     <div class="kpi"><div class="v" id="kpi-arr">—</div><div class="l">Prochain pic</div></div>
   </div>
+  <button id="btn-legende" type="button">Lignes ▾</button>
   <div id="sep-legende"></div>
   <div id="onglets"></div>
   <div id="legende"></div>
 </div>
 
 <div id="fps">-- fps</div>
-<div id="badge-kiosque">Présentation automatique — Échap pour reprendre la main</div>
+<div id="badge-kiosque">Présentation automatique — Échap ou glisser pour reprendre la main</div>
 
 <div id="controles" class="panneau">
   <div id="rangees">
@@ -287,14 +349,24 @@ for (const f of LIGNES) {
   }
 }
 const vueCarte = { cx: (bxmin + bxmax) / 2, cy: (bymin + bymax) / 2, echelle: 1 };
-const MARGE = 90;
-function echellePleine() {
-  const ex = (bxmax - bxmin) || 1, ey = (bymax - bymin) || 1;
-  return Math.min((innerWidth - 2 * MARGE) / ex, (innerHeight - 2 * MARGE) / ey);
+const REQ_MOBILE = window.matchMedia ? matchMedia("(max-width: 760px), (max-height: 520px)") : { matches: false };
+function estMobile() { return REQ_MOBILE.matches; }
+// zone libre entre les panneaux (bureau : marge symétrique 90 px, donc rendu inchangé)
+function marges() {
+  if (!estMobile()) return { x: 90, haut: 90, bas: 90 };
+  return innerHeight > innerWidth ? { x: 10, haut: 78, bas: 142 } : { x: 170, haut: 12, bas: 118 };
 }
+function echelleBbox(ex, ey) {
+  const m = marges();
+  return Math.min((innerWidth - 2 * m.x) / Math.max(ex, 1e-9),
+                  (innerHeight - m.haut - m.bas) / Math.max(ey, 1e-9));
+}
+function decalageY(ech) { const m = marges(); return (m.haut - m.bas) / 2 / ech; }
+function echellePleine() { return echelleBbox((bxmax - bxmin) || 1, (bymax - bymin) || 1); }
 function ajusterVue() {
-  vueCarte.cx = (bxmin + bxmax) / 2; vueCarte.cy = (bymin + bymax) / 2;
   vueCarte.echelle = echellePleine();
+  vueCarte.cx = (bxmin + bxmax) / 2;
+  vueCarte.cy = (bymin + bymax) / 2 + decalageY(vueCarte.echelle);
 }
 function versEcran(x, y) {
   return [innerWidth / 2 + (x - vueCarte.cx) * vueCarte.echelle,
@@ -314,9 +386,8 @@ function bboxDeRefs(refs) {
 }
 function camVers(bbox, zoom = 1, duree = 1800) {
   const [x0, y0, x1, y1] = bbox;
-  const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
-  const echCible = Math.min((innerWidth - 2 * MARGE) / Math.max(x1 - x0, 1e-9),
-                            (innerHeight - 2 * MARGE) / Math.max(y1 - y0, 1e-9)) * zoom;
+  const echCible = echelleBbox(x1 - x0, y1 - y0) * zoom;
+  const mx = (x0 + x1) / 2, my = (y0 + y1) / 2 + decalageY(echCible);
   const dep = { cx: vueCarte.cx, cy: vueCarte.cy, ech: vueCarte.echelle };
   const t0 = performance.now();
   (function anime(now) {
@@ -357,15 +428,23 @@ const modesActifs = new Set(["metro", "tram", "bus"]); // filtres légende
 const canvas = document.getElementById("carte");
 const ctxBrut = canvas.getContext ? canvas.getContext("2d") : null;
 const ctx = ctxBrut || new Proxy({}, { get: () => () => {} });
+let EV = 1; // échelle visuelle des traits/points (1 sur bureau, réduite sur petit écran)
+let largeurPrec = 0;
 function redimensionner() {
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2); // plafonné : 3x sur mobile = 2,25x plus de pixels pour rien
+  EV = Math.max(0.6, Math.min(1, Math.min(innerWidth, innerHeight * 1.2) / 900));
   canvas.width = innerWidth * dpr;
   canvas.height = innerHeight * dpr;
   canvas.style.width = innerWidth + "px";
   canvas.style.height = innerHeight + "px";
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
-addEventListener("resize", redimensionner);
+addEventListener("resize", () => {
+  redimensionner();
+  // recadrer seulement si la largeur change (rotation) — pas quand la barre d'URL mobile se replie
+  if (innerWidth !== largeurPrec && typeof ajusterVue === "function" && !kiosque && zoomActif === null) ajusterVue();
+  largeurPrec = innerWidth;
+});
 redimensionner();
 
 // ============================ BADGES DE LIGNES (terminus) ============================
@@ -423,10 +502,10 @@ function dessiner(t) {
       }
       ctx.strokeStyle = "#" + f.properties.color;
       ctx.globalAlpha = st.alphaLigne;
-      ctx.lineWidth = st.epLigne;
+      ctx.lineWidth = st.epLigne * EV;
       ctx.stroke();
       ctx.globalAlpha = st.alphaLigne * 0.28;
-      ctx.lineWidth = st.epLigne * 2.4;
+      ctx.lineWidth = st.epLigne * 2.4 * EV;
       ctx.stroke();
     }
   }
@@ -464,13 +543,13 @@ function dessiner(t) {
       ctx.lineTo(hx, hy);
       ctx.strokeStyle = "#" + ROUTES[c.ref].color;
       ctx.globalAlpha = st.alphaTrail;
-      ctx.lineWidth = st.epTrail;
+      ctx.lineWidth = st.epTrail * EV;
       ctx.stroke();
       const pulse = mode === "metro" ? 2.4 + Math.sin(t * 0.9 + c.t0 * 0.013) * 0.9 : 2.4;
-      ctx.beginPath(); ctx.arc(hx, hy, st.rTete + pulse, 0, 6.2832);
+      ctx.beginPath(); ctx.arc(hx, hy, (st.rTete + pulse) * EV, 0, 6.2832);
       ctx.fillStyle = "#" + ROUTES[c.ref].color; ctx.globalAlpha = st.alphaHalo; ctx.fill();
-      ctx.beginPath(); ctx.arc(hx, hy, st.rTete, 0, 6.2832); ctx.globalAlpha = 0.95; ctx.fill();
-      ctx.beginPath(); ctx.arc(hx, hy, st.rCoeur, 0, 6.2832); ctx.fillStyle = "#fff"; ctx.fill();
+      ctx.beginPath(); ctx.arc(hx, hy, st.rTete * EV, 0, 6.2832); ctx.globalAlpha = 0.95; ctx.fill();
+      ctx.beginPath(); ctx.arc(hx, hy, st.rCoeur * EV, 0, 6.2832); ctx.fillStyle = "#fff"; ctx.fill();
     }
   }
   // badges de lignes + terminus — visibilité selon modes actifs et zoom
@@ -589,10 +668,17 @@ function phaseJournee(t) {
     // innerHTML sûr : données générées par le pipeline (couleur 6-hex, numéro de ligne)
     div.innerHTML = `<span class="num-badge" style="background:#${r.color};color:#${r.text_color}">${r.line}</span>
                      <span class="nb" id="nb-l${r.ref}">0</span>`;
-    div.addEventListener("click", () => { quitterKiosque(); zoomLigne(r.ref); marquerZoom(r.ref); });
+    div.addEventListener("click", () => {
+      quitterKiosque(); zoomLigne(r.ref); marquerZoom(r.ref);
+      if (estMobile()) document.body.classList.remove("legende-ouverte"); // libérer la carte
+    });
     elLegende.appendChild(div);
   }
   dessinerOnglets();
+  document.getElementById("btn-legende").addEventListener("click", () => {
+    const ouvert = document.body.classList.toggle("legende-ouverte");
+    document.getElementById("btn-legende").textContent = ouvert ? "Fermer ▴" : "Lignes ▾";
+  });
 }
 function marquerZoom(ref) {
   document.querySelectorAll(".ligne-item").forEach(el => el.classList.remove("zoom-on"));
@@ -703,20 +789,60 @@ document.querySelectorAll(".vit").forEach(b => {
   });
 });
 document.getElementById("btn-kiosque").addEventListener("click", demarrerKiosque);
+function zoomAutour(sx, sy, facteur) {
+  const e0 = vueCarte.echelle;
+  const e1 = Math.max(echellePleine() * 0.5, Math.min(echellePleine() * 40, e0 * facteur));
+  const wx = vueCarte.cx + (sx - innerWidth / 2) / e0, wy = vueCarte.cy - (sy - innerHeight / 2) / e0;
+  vueCarte.echelle = e1;
+  vueCarte.cx = wx - (sx - innerWidth / 2) / e1;
+  vueCarte.cy = wy + (sy - innerHeight / 2) / e1;
+}
 canvas.addEventListener("wheel", e => {
   e.preventDefault(); quitterKiosque();
-  vueCarte.echelle *= e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  zoomAutour(e.clientX, e.clientY, e.deltaY < 0 ? 1.15 : 1 / 1.15);
 }, { passive: false });
-let drag = null;
-canvas.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY }; canvas.classList.add("drag"); });
+let drag = null, pinch = null;
+const pointeurs = new Map();
+function ecartPinch() {
+  const [a, b] = [...pointeurs.values()];
+  return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+}
+canvas.addEventListener("pointerdown", e => {
+  if (canvas.setPointerCapture) try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+  pointeurs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointeurs.size === 2) { pinch = ecartPinch(); drag = null; }
+  else if (pointeurs.size === 1) drag = { x: e.clientX, y: e.clientY };
+  canvas.classList.add("drag");
+});
 addEventListener("pointermove", e => {
+  if (!pointeurs.has(e.pointerId)) return;
+  pointeurs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch && pointeurs.size >= 2) {
+    quitterKiosque();
+    const p = ecartPinch();
+    // translation du point milieu + zoom autour de lui
+    vueCarte.cx -= (p.mx - pinch.mx) / vueCarte.echelle;
+    vueCarte.cy += (p.my - pinch.my) / vueCarte.echelle;
+    zoomAutour(p.mx, p.my, p.d / pinch.d);
+    pinch = p;
+    return;
+  }
   if (!drag) return;
+  if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < 1) return;
   quitterKiosque();
   vueCarte.cx -= (e.clientX - drag.x) / vueCarte.echelle;
   vueCarte.cy += (e.clientY - drag.y) / vueCarte.echelle;
   drag = { x: e.clientX, y: e.clientY };
 });
-addEventListener("pointerup", () => { drag = null; canvas.classList.remove("drag"); });
+function finPointeur(e) {
+  pointeurs.delete(e.pointerId);
+  if (pointeurs.size < 2) pinch = null;
+  if (pointeurs.size === 1) { const [q] = pointeurs.values(); drag = { x: q.x, y: q.y }; }
+  if (pointeurs.size === 0) { drag = null; canvas.classList.remove("drag"); }
+}
+addEventListener("pointerup", finPointeur);
+addEventListener("pointercancel", finPointeur);
+canvas.addEventListener("dblclick", () => { quitterKiosque(); zoomActif = null; camVers([bxmin, bymin, bxmax, bymax], 1, 700); });
 addEventListener("keydown", e => {
   if (e.code === "Space") { e.preventDefault(); quitterKiosque(); basculerLecture(); }
   if (e.code === "Escape") quitterKiosque();
